@@ -102,19 +102,22 @@ check "видео всё ещё на месте после отказов" 200 "
 rm -rf "$TMPD"
 
 echo "== удаление комнаты и purge (Dramatiq)"
+LOGS() { docker compose logs --tail=300 worker-cpu 2>/dev/null; }
+PURGE_BEFORE=$(LOGS | grep -c "room_purged")
 check "DELETE создателем -> 204" 204 "$(code -X DELETE "$BASE/rooms/$ROOM" -H "X-Participant-Token: $TOKEN")"
 check "GET удалённой комнаты -> 410" 410 "$(code "$BASE/rooms/$ROOM")"
 printf '  ... ждём purge_room '
-for _ in $(seq 1 15); do
-  if ! curl -s -m 5 "http://127.0.0.1:8091/api/rooms/$ROOM" >/dev/null 2>&1; then :; fi
-  LEFT=$(docker compose -f "$(dirname "$0")/../docker-compose.yml" logs --tail=200 worker-cpu 2>/dev/null \
-    | grep -c "room_purged")
-  [ "${LEFT:-0}" -ge 1 ] && break
+PURGE_DELTA=0
+for _ in $(seq 1 20); do
+  PURGE_DELTA=$(( $(LOGS | grep -c "room_purged") - PURGE_BEFORE ))
+  [ "$PURGE_DELTA" -ge 1 ] && break
   printf '.'
   sleep 2
 done
 echo
-check "purge_room выполнился (лог воркера)" 1 "${LEFT:-0}"
+check "purge_room выполнился (новый лог воркера)" 1 "$PURGE_DELTA"
+check "каталог комнаты удалён с диска" 1 \
+  "$([ -d "data/rooms/$ROOM" ] && echo 0 || echo 1)"
 
 echo
 echo "Итого: успешно $PASS, провалов $FAIL"
