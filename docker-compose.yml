@@ -1,0 +1,102 @@
+name: dubbing
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./data:/data
+      - ./backend/app:/srv/app/app:ro          # dev: код без пересборки
+      - ./backend/migrations:/srv/app/migrations:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    ports:
+      - "127.0.0.1:${API_PORT:-8091}:8000"      # только для отладки; снаружи — через nginx фронтенда
+    restart: unless-stopped
+
+  worker-cpu:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./data:/data
+      - ./backend/app:/srv/app/app:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["dramatiq", "app.workers.broker", "--queues", "cpu", "--processes", "2", "--threads", "4", "--prefetch", "1"]
+    restart: unless-stopped
+
+  worker-gpu:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.ml
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - NVIDIA_VISIBLE_DEVICES=${GPU_DEVICE:-0}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ./data:/data
+      - ./backend/app:/srv/app/app:ro
+      - hf-cache:/root/.cache/huggingface
+    depends_on:
+      redis:
+        condition: service_healthy
+    # GPU пробрасывается только если на хосте установлен nvidia-container-toolkit.
+    # Проверка: docker info | grep -i runtime  -> должен быть nvidia
+    # Если toolkit нет: docker compose up без этого сервиса либо запуск воркера в venv на хосте.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: ["dramatiq", "app.workers.broker", "--queues", "gpu,system", "--processes", "1", "--threads", "1", "--prefetch", "1"]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: /api
+    ports:
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8090}:80"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  hf-cache:

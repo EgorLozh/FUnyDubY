@@ -1,0 +1,9 @@
+# Только для worker-gpu (ставится поверх requirements.txt; torch ставится отдельно из cu124-индекса)
+faster-whisper==1.1.1
+ctranslate2==4.5.0
+pyannote.audio==4.0.0
+demucs==4.0.1
+torchaudio==2.5.1
+# Bandit v2 (D1) — ставится из исходников на этапе ML-конвейера:
+#   git+https://github.com/kwatcharasupat/bandit-v2  (либо копия репозитория в app/ml/vendor/)
+# Веса: Zenodo record 12701995 -> MODEL_CACHE_DIR/bandit_v2

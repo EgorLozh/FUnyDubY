@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Collaborative Video Dubbing Platform</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+           background: #0d0f14; color: #e6e9f0;
+           font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .card { max-width: 620px; padding: 32px 36px; border: 1px solid #232838;
+            border-radius: 14px; background: #131722; }
+    h1 { margin: 0 0 6px; font-size: 20px; letter-spacing: .2px; }
+    .muted { color: #8b93a7; }
+    code { background: #1b2130; padding: 2px 6px; border-radius: 6px; font-size: 13px; }
+    ul { margin: 14px 0 0; padding-left: 18px; }
+    .ok { color: #8ce99a; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Collaborative Video Dubbing Platform</h1>
+    <p class="muted">Этап 1 roadmap: инфраструктура поднята. Интерфейс комнаты появится на этапе 8.</p>
+    <ul>
+      <li>API: <code>/api/health</code>, <code>/api/ready</code></li>
+      <li>Создание комнаты: <code>POST /api/rooms</code></li>
+      <li>Документация: <code>/api/docs</code></li>
+    </ul>
+    <p class="muted" style="margin-top:18px">Проверка связи с бэкендом: <span id="probe" class="muted">…</span></p>
+  </div>
+  <script>
+    fetch('/api/ready').then(r => r.json()).then(d => {
+      const el = document.getElementById('probe');
+      el.textContent = d.status;
+      el.className = d.status === 'ready' ? 'ok' : 'muted';
+    }).catch(e => { document.getElementById('probe').textContent = 'нет ответа (' + e + ')'; });
+  </script>
+</body>
+</html>
