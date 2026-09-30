@@ -47,6 +47,7 @@ class Video(Base, CreatedAtMixin):
         String(20), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
     )
     storage_dir: Mapped[str] = mapped_column(Text, nullable=False)
+    source_path: Mapped[str] = mapped_column(Text, nullable=False)
     original_filename: Mapped[str] = mapped_column(Text, nullable=False)
     container: Mapped[str] = mapped_column(String(32), nullable=False)
     video_codec: Mapped[str | None] = mapped_column(String(32), nullable=True)

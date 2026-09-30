@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api.routes import health, rooms
+from app.api.routes import health, rooms, video
 from app.core.config import settings
 from app.core.db import engine
 from app.core.errors import DomainError
@@ -112,3 +112,4 @@ async def unhandled_error_handler(_: Request, exc: Exception) -> JSONResponse:
 
 app.include_router(health.router)
 app.include_router(rooms.router)
+app.include_router(video.router)

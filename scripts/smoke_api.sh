@@ -64,6 +64,43 @@ check "DELETE без токена -> 401" 401 "$(code -X DELETE "$BASE/rooms/$RO
 check "DELETE с чужим токеном (не создатель) -> 403" 403 \
   "$(code -X DELETE "$BASE/rooms/$ROOM" -H "X-Participant-Token: $(echo "$SECOND" | json "d['token']")")"
 
+echo "== видео: подготовка фикстур (ffmpeg ливфи-источники)"
+TMPD=$(mktemp -d)
+gen() { ffmpeg -nostdin -v error -f lavfi -i "testsrc=size=320x240:rate=15" ${2:+-f lavfi -i "$2"} -t "$1" -c:v libx264 -preset ultrafast -pix_fmt yuv420p ${3:+-c:a aac} -shortest -y "$4"; }
+gen 4 "sine=frequency=440" audio "$TMPD/ok.mp4"
+gen 4 "" "" "$TMPD/noaudio.mp4"
+gen 660 "sine=frequency=440" audio "$TMPD/toolong.mp4"
+gen 4 "sine=frequency=440" audio "$TMPD/bad.avi"
+ls -la "$TMPD" | tail -5
+
+echo "== видео: валидации"
+check "POST видео без токена -> 401" 401 \
+  "$(code -X POST "$BASE/rooms/$ROOM/video" -F "file=@$TMPD/ok.mp4")"
+check "загрузка MP4 -> 201" 201 \
+  "$(code -X POST "$BASE/rooms/$ROOM/video" -H "X-Participant-Token: $TOKEN" -F "file=@$TMPD/ok.mp4")"
+check "повторная загрузка без replace -> 409" 409 \
+  "$(code -X POST "$BASE/rooms/$ROOM/video" -H "X-Participant-Token: $TOKEN" -F "file=@$TMPD/ok.mp4")"
+check "GET метаданных видео" 200 "$(code "$BASE/rooms/$ROOM/video")"
+check "duration_ms ≈ 4000" 1 "$(curl -s "$BASE/rooms/$ROOM/video" | json "1 if 3500 <= d['duration_ms'] <= 4500 else 0")"
+check "has_audio = True" True "$(curl -s "$BASE/rooms/$ROOM/video" | json "d['has_audio']")"
+check "sha256 посчитан" 64 "$(curl -s "$BASE/rooms/$ROOM/video" | json "len(d['sha256'])")"
+check "Range-запрос -> 206" 206 \
+  "$(code -H 'Range: bytes=0-99' "$BASE/rooms/$ROOM/video/file")"
+check "Range вернул ровно 100 байт" 100 \
+  "$(curl -s -H 'Range: bytes=0-99' "$BASE/rooms/$ROOM/video/file" | wc -c | tr -d ' ')"
+
+echo "== видео: отказы"
+check "видео без звука -> 422 no_audio" 422 \
+  "$(code -X POST "$BASE/rooms/$ROOM/video?replace=1" -H "X-Participant-Token: $TOKEN" -F "file=@$TMPD/noaudio.mp4")"
+check "11-минутное видео -> 422 video_too_long" 422 \
+  "$(code -X POST "$BASE/rooms/$ROOM/video?replace=1" -H "X-Participant-Token: $TOKEN" -F "file=@$TMPD/toolong.mp4")"
+check "AVI -> 415 unsupported_format" 415 \
+  "$(code -X POST "$BASE/rooms/$ROOM/video?replace=1" -H "X-Participant-Token: $TOKEN" -F "file=@$TMPD/bad.avi")"
+check "мусорный файл -> 415/422" 415 \
+  "$(code -X POST "$BASE/rooms/$ROOM/video?replace=1" -H "X-Participant-Token: $TOKEN" -F "file=@/etc/hostname;filename=junk.mp4")"
+check "видео всё ещё на месте после отказов" 200 "$(code "$BASE/rooms/$ROOM/video")"
+rm -rf "$TMPD"
+
 echo "== удаление комнаты и purge (Dramatiq)"
 check "DELETE создателем -> 204" 204 "$(code -X DELETE "$BASE/rooms/$ROOM" -H "X-Participant-Token: $TOKEN")"
 check "GET удалённой комнаты -> 410" 410 "$(code "$BASE/rooms/$ROOM")"

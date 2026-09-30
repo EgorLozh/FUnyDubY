@@ -1,16 +1,9 @@
-"""Хранилище: единственная точка доступа к файлам на диске.
-
-Правила:
-* в БД лежат только ОТНОСИТЕЛЬНЫЕ пути от STORAGE_ROOT;
-* наружу (в ФС) путь превращается только через safe_join;
-* запись — через временный файл в tmp/ комнаты + атомарный rename.
-"""
+"""Расширяем storage: считать sha256 при потоковой записи (нужно для видео)."""
 
 from __future__ import annotations
 
+import hashlib
 import os
-import shutil
-from collections.abc import AsyncIterator
 from pathlib import Path
 
 import aiofiles
@@ -18,16 +11,17 @@ from fastapi import UploadFile
 
 from app.core.config import settings
 from app.core.errors import FileTooLarge, StorageExhausted
-from app.core.security import room_dir, room_relative, safe_join
+from app.core.security import room_relative, safe_join
 
 CHUNK = 1024 * 1024  # 1 МБ
 
 
 def free_bytes(path: Path | None = None) -> int:
+    import shutil
+
     target = path or settings.storage_root
     target.mkdir(parents=True, exist_ok=True)
-    usage = shutil.disk_usage(target)
-    return usage.free
+    return shutil.disk_usage(target).free
 
 
 def storage_root_is_writable() -> bool:
@@ -54,7 +48,7 @@ def ensure_space(needed_bytes: int = 0) -> None:
 
 def ensure_room_layout(room_id: str) -> Path:
     """Создать каталог комнаты со всеми подкаталогами схемы §15."""
-    root = room_dir(room_id)
+    root = absolute(Path("rooms") / room_id)
     for sub in (
         "original",
         "audio",
@@ -85,18 +79,19 @@ async def save_upload_stream(
     *subdir: str,
     filename: str,
     max_bytes: int,
-) -> tuple[str, int]:
-    """Потоково сохранить загружаемый файл. Возвращает (относительный путь, размер).
+) -> tuple[str, int, str]:
+    """Потоково сохранить загружаемый файл.
 
-    Пишем в tmp/ комнаты, затем атомарно переносим — «половины файла» под рабочим именем не бывает.
+    Возвращает (относительный путь, размер, sha256). Пишем в tmp/ комнаты и переносим
+    атомарно — «половины файла» под рабочим именем не бывает.
     """
     root = ensure_room_layout(room_id)
     ensure_space()
-    tmp_dir = root / "tmp"
-    tmp_path = tmp_dir / f"{os.getpid()}-{filename}.part"
+    tmp_path = root / "tmp" / f"{os.getpid()}-{filename}.part"
     final_rel = room_relative(room_id, *subdir, filename)
     final_path = absolute(final_rel)
 
+    digest = hashlib.sha256()
     written = 0
     try:
         async with aiofiles.open(tmp_path, "wb") as fh:
@@ -107,6 +102,7 @@ async def save_upload_stream(
                         f"Файл больше допустимого размера ({max_bytes // (1024 * 1024)} МБ)",
                         extra={"limit_bytes": max_bytes},
                     )
+                digest.update(chunk)
                 await fh.write(chunk)
             await fh.flush()
             os.fsync(fh.fileno())
@@ -116,7 +112,7 @@ async def save_upload_stream(
 
     final_path.parent.mkdir(parents=True, exist_ok=True)
     os.replace(tmp_path, final_path)
-    return final_rel, written
+    return final_rel, written, digest.hexdigest()
 
 
 def write_bytes_atomic(room_id: str, data: bytes, *parts: str) -> str:
@@ -131,6 +127,8 @@ def write_bytes_atomic(room_id: str, data: bytes, *parts: str) -> str:
 
 def delete_room(room_id: str) -> None:
     """Полное удаление каталога комнаты. Никогда не выходит за пределы rooms/{room_id}."""
+    import shutil
+
     root = room_storage_dir(room_id).resolve()
     rooms_root = settings.rooms_root.resolve()
     if rooms_root not in root.parents or root == rooms_root:
@@ -152,7 +150,7 @@ def room_size_bytes(room_id: str) -> int:
     return total
 
 
-async def stream_file(path: Path, start: int = 0, end: int | None = None) -> AsyncIterator[bytes]:
+async def stream_file(path: Path, start: int = 0, end: int | None = None):
     """Отдача файла куском для Range-запросов."""
     async with aiofiles.open(path, "rb") as fh:
         await fh.seek(start)
