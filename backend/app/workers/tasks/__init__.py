@@ -6,6 +6,6 @@
 уходят в очередь и остаются там навсегда.
 """
 
-from app.workers.tasks import purge_room  # noqa: F401
+from app.workers.tasks import pipeline, purge_room  # noqa: F401
 
-__all__ = ["purge_room"]
+__all__ = ["pipeline", "purge_room"]

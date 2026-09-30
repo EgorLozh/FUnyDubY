@@ -12,6 +12,7 @@ from app.api.deps import ParticipantDep, RoomDep, SessionDep
 from app.core.errors import NotFound
 from app.core.logging import get_logger
 from app.schemas.video import VideoOut
+from app.services import jobs as jobs_service
 from app.services import storage, video as video_service
 
 log = get_logger("video.api")
@@ -36,8 +37,13 @@ async def upload_video(
     participant: ParticipantDep,
     file: Annotated[UploadFile, File(description="MP4/WebM/MOV, до 10 минут")],
     replace: Annotated[bool, Query()] = False,
+    autostart: Annotated[bool, Query(description="сразу запустить обработку")] = True,
 ) -> VideoOut:
     video = await video_service.upload_video(session, room, file, replace=replace)
+    if autostart:
+        # Обработка стартует сама после загрузки (§6 архитектуры): этап extract_audio идёт первым
+        job = await jobs_service.create_or_reset_job(session, room, video, scope="all")
+        await jobs_service.enqueue_first_stage(job.id)
     return VideoOut.model_validate(video)
 
 

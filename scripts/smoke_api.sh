@@ -101,6 +101,35 @@ check "мусорный файл -> 422 corrupt_media" 422 \
 check "видео всё ещё на месте после отказов" 200 "$(code "$BASE/rooms/$ROOM/video")"
 rm -rf "$TMPD"
 
+echo "== конвейер обработки (очередь + этапы)"
+JOB=$(curl -s -X POST "$BASE/rooms/$ROOM/jobs" -H "X-Participant-Token: $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"scope":"all"}' | json "d['id']")
+check "POST /jobs -> uuid" 36 "${#JOB}"
+EX=""
+for _ in $(seq 1 30); do
+  EX=$(curl -s "$BASE/rooms/$ROOM/jobs/$JOB" | json "[s['status'] for s in d['stages'] if s['stage']=='extract_audio'][0]")
+  [ "$EX" = "DONE" ] && break
+  sleep 2
+done
+check "extract_audio: DONE" DONE "$EX"
+check "audio/mix.wav создан" 1 "$([ -f "data/rooms/$ROOM/audio/mix.wav" ] && echo 1 || echo 0)"
+check "audio/mix_mono16k.wav создан" 1 "$([ -f "data/rooms/$ROOM/audio/mix_mono16k.wav" ] && echo 1 || echo 0)"
+ST=""
+for _ in $(seq 1 20); do
+  ST=$(curl -s "$BASE/rooms/$ROOM/jobs/$JOB" | json "d['status']")
+  [ "$ST" = "FAILED" ] && break
+  sleep 2
+done
+check "ML-этап останавливается с понятной ошибкой" FAILED "$ST"
+check "код ошибки: stage_not_implemented" stage_not_implemented \
+  "$(curl -s "$BASE/rooms/$ROOM/jobs/$JOB" | json "d['error']['code']")"
+check "ошибка указывает на конкретный этап" separate_speech \
+  "$(curl -s "$BASE/rooms/$ROOM/jobs/$JOB" | json "d['error']['stage']")"
+check "повторный POST /jobs идемпотентен (тот же джоб)" "$JOB" \
+  "$(curl -s -X POST "$BASE/rooms/$ROOM/jobs" -H "X-Participant-Token: $TOKEN" -H 'Content-Type: application/json' -d '{"scope":"all"}' | json "d['id']")"
+check "SSE отдаёт hello" 1 \
+  "$(timeout 6 curl -s -N "$BASE/rooms/$ROOM/events" | grep -c 'event: hello' | head -1)"
+
 echo "== удаление комнаты и purge (Dramatiq)"
 LOGS() { docker compose logs --tail=300 worker-cpu 2>/dev/null; }
 PURGE_BEFORE=$(LOGS | grep -c "room_purged")
