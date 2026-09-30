@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
 from app.api.deps import (
     OptionalParticipantDep,
@@ -107,10 +107,13 @@ async def patch_room(
     return await _room_out(session, room)
 
 
-@router.delete("/{room_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_room(room: RoomDep, session: SessionDep, participant: ParticipantDep) -> None:
+@router.delete("/{room_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def delete_room(
+    room: RoomDep, session: SessionDep, participant: ParticipantDep
+) -> Response:
     require_creator(room, participant)
     await rooms_service.soft_delete(session, room)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

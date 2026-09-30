@@ -54,21 +54,22 @@ app = FastAPI(
 async def request_context(request: Request, call_next):
     rid = new_request_id()
     started = time.perf_counter()
+    status_code = 500
     try:
         response = await call_next(request)
+        status_code = response.status_code
     except DomainError:
         raise
     except Exception:
         log.exception("unhandled_error", path=request.url.path, method=request.method)
         raise
     finally:
-        duration_ms = round((time.perf_counter() - started) * 1000, 1)
         log.info(
             "request",
             method=request.method,
             path=request.url.path,
-            status=getattr(response, "status_code", 500) if "response" in dir() else 500,
-            duration_ms=duration_ms,
+            status=status_code,
+            duration_ms=round((time.perf_counter() - started) * 1000, 1),
         )
     response.headers["X-Request-ID"] = request_id_var.get() or rid
     return response
