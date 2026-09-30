@@ -135,9 +135,15 @@ async def soft_delete(session: AsyncSession, room: Room) -> None:
     room.deleted_at = datetime.now(UTC)
     room.status = RoomStatus.DELETING
     await session.commit()
-    from app.workers.tasks.purge_room import purge_room
 
-    purge_room.send(str(room.id))
+    try:
+        from app.workers.tasks.purge_room import purge_room
+
+        purge_room.send(str(room.id))
+    except Exception as exc:  # noqa: BLE001
+        # Комната уже помечена удалённой; если очередь недоступна, её подберёт
+        # expire_rooms/reconcile — терять из-за этого ответ пользователю нельзя.
+        log.error("purge_enqueue_failed", room_id=room.id, error=str(exc))
     log.info("room_soft_deleted", room_id=room.id)
 
 
