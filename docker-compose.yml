@@ -51,7 +51,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: ["dramatiq", "--queues", "cpu,system", "--processes", "2", "--threads", "4", "app.workers.broker", "app.workers.tasks"]
+    command: ["dramatiq", "--queues", "cpu", "system", "--processes", "2", "--threads", "4", "app.workers.broker", "app.workers.tasks"]
     restart: unless-stopped
 
   worker-gpu:
