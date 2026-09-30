@@ -55,6 +55,10 @@ docker compose logs --tail=50 worker-cpu
 | `git pull` на сервере: `untracked working tree files would be overwritten` | сгенерированная миграция уже лежит в рабочем дереве | `rm -f backend/migrations/versions/<файл>.py && git pull ~/FUnyDubY.git main` |
 | GPU-воркер не стартует: `could not select device driver` | на хосте нет `nvidia-container-toolkit` | `sudo apt install -y nvidia-container-toolkit && sudo systemctl restart docker`; до этого worker-gpu запускать не нужно (`docker compose up -d redis api worker-cpu frontend`) |
 | `.env` с CRLF | значения приезжают с `\r` (например, сломанный `HF_TOKEN`) | `tr -d '\r' < .env > .env.lf && mv .env.lf .env`; в репозитории лежит `.gitattributes` с `eol=lf` |
+| `alembic upgrade` → `type "room_status" already exists` | PG-типы переживают `drop_table` | `downgrade` в `initial_schema` теперь чистит типы; вручную: `DROP TYPE IF EXISTS room_status, job_status, stage_status, stage_name, render_status, recording_status CASCADE` |
+| `alembic downgrade base` оставил таблицы/FK в неполном виде, `upgrade` падает | оборванная транзакция DDL | `make db-rebuild` (downgrade base + upgrade head) или жёстко: `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` затем `alembic upgrade head` |
+| FK `rooms -> videos/participants` отсутствуют после чистой схемы | автогенерация пропускает связи, помеченные `use_alter=True` | они добавлены в миграцию руками (`op.create_foreign_key` в конце `initial_schema`) — если правите модели, проверяйте наличие этих двух FK после пересборки |
+| `git pull` на сервере падает: `untracked working tree files would be overwritten by merge` | в рабочем дереве лежит сгенерированный файл (миграция, дамп) | `git status --short`, затем `rm` лишнего или `git checkout -- .` перед pull |
 
 ## Известные ограничения текущего состояния
 

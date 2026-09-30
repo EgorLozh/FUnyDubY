@@ -230,6 +230,10 @@ def upgrade() -> None:
     )
     op.create_index('ix_recordings_participant', 'recordings', ['participant_id'], unique=False)
     op.create_index('uq_recordings_current_per_line', 'recordings', ['line_id'], unique=True, postgresql_where=sa.text('is_current'))
+    # Отложенные FK (use_alter в моделях): rooms ссылается на videos и participants,
+    # а те — на rooms. Автогенерация Alembic эти связи пропускает, поэтому они здесь явно.
+    op.create_foreign_key('fk_rooms_video_id', 'rooms', 'videos', ['video_id'], ['id'], ondelete='SET NULL')
+    op.create_foreign_key('fk_rooms_owner_participant_id', 'rooms', 'participants', ['owner_participant_id'], ['id'], ondelete='SET NULL')
     # ### end Alembic commands ###
 
 
@@ -262,4 +266,15 @@ def downgrade() -> None:
     op.drop_index('ix_rooms_status_expires', table_name='rooms')
     op.drop_index('ix_rooms_deleted_at', table_name='rooms')
     op.drop_table('rooms')
+    # PG-типы не удаляются вместе с таблицами: без этого повторный upgrade падает
+    # на `type "room_status" already exists`.
+    for type_name in (
+        'room_status',
+        'job_status',
+        'stage_status',
+        'stage_name',
+        'render_status',
+        'recording_status',
+    ):
+        op.execute(f"DROP TYPE IF EXISTS {type_name}")
     # ### end Alembic commands ###

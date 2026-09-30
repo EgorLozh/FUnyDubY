@@ -35,6 +35,10 @@ migration:     ## сгенерировать миграцию: make migration m=
 db-reset:      ## СНОС всех таблиц приложения (только dev!)
 	$(API) python -m app.scripts.db_reset
 
+db-rebuild:    ## Полная пересборка схемы: downgrade base + upgrade head (только dev!)
+	$(API) alembic downgrade base
+	$(API) alembic upgrade head
+
 health:        ## проверить готовность
 	@curl -s -m 10 http://127.0.0.1:$${API_PORT:-8091}/api/ready | python -m json.tool || echo "api недоступен"
 

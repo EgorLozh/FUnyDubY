@@ -1,6 +1,9 @@
-# ML-woker: CUDA + torch + модели. Тяжёлый образ, отдельно от api.
-# Базовый образ с CUDA-рантаймом; torch ставится с индексом cu124 (проверено: доступен с хоста).
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+# ML-воркер: CUDA + torch + модели. Тяжёлый образ, отдельно от api.
+#
+# Базовый образ — Ubuntu 24.04: в нём уже есть python3.12, тогда как в ubuntu22.04
+# пакет python3.12 отсутствует и сборка падает на apt (проверено).
+# pip ставится в venv: в 24.04 системный pip заблокирован PEP 668.
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu24.04
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -8,16 +11,17 @@ ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     STORAGE_ROOT=/data \
     HF_HOME=/root/.cache/huggingface \
-    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    PATH="/opt/venv/bin:$PATH"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.12 python3.12-venv python3-pip ffmpeg curl ca-certificates libsndfile1 \
+        python3 python3-venv python3-dev \
+        ffmpeg curl ca-certificates libsndfile1 \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.12 /usr/local/bin/python \
-    && ln -sf /usr/bin/python3.12 /usr/local/bin/python3
+    && python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip wheel
 
 WORKDIR /srv/app
-RUN python -m pip install --upgrade pip
 
 # torch первым слоем — самый большой и редко меняющийся
 COPY requirements-ml.txt requirements.txt ./
@@ -30,4 +34,4 @@ COPY migrations ./migrations
 COPY app ./app
 COPY scripts ./scripts
 
-CMD ["dramatiq", "app.workers.broker", "--queues", "gpu,system", "--processes", "1", "--threads", "1", "--prefetch", "1"]
+CMD ["dramatiq", "--queues", "gpu", "--processes", "1", "--threads", "1", "app.workers.broker", "app.workers.tasks"]
