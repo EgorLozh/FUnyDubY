@@ -51,7 +51,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: ["dramatiq", "app.workers.broker", "--queues", "cpu,system", "--processes", "2", "--threads", "4"]
+    command: ["dramatiq", "--queues", "cpu,system", "--processes", "2", "--threads", "4", "app.workers.broker", "app.workers.tasks"]
     restart: unless-stopped
 
   worker-gpu:
@@ -81,7 +81,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: ["dramatiq", "app.workers.broker", "--queues", "gpu", "--processes", "1", "--threads", "1"]
+    command: ["dramatiq", "--queues", "gpu", "--processes", "1", "--threads", "1", "app.workers.broker", "app.workers.tasks"]
     restart: unless-stopped
 
   frontend:
