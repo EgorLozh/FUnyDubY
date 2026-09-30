@@ -99,6 +99,8 @@ check "AVI -> 415 unsupported_format" 415 \
 check "мусорный файл -> 422 corrupt_media" 422 \
   "$(code -X POST "$BASE/rooms/$ROOM/video?replace=1" -H "X-Participant-Token: $TOKEN" -F "file=@/etc/hostname;filename=junk.mp4")"
 check "видео всё ещё на месте после отказов" 200 "$(code "$BASE/rooms/$ROOM/video")"
+check "файл видео не затёрт неудачными попытками" 1 \
+  "$(ls data/rooms/$ROOM/original/source.* >/dev/null 2>&1 && echo 1 || echo 0)"
 rm -rf "$TMPD"
 
 echo "== конвейер обработки (очередь + этапы)"

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from uuid import uuid4
+
 from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,21 +49,31 @@ async def upload_video(
         )
 
     storage.ensure_space(settings.max_upload_bytes)
-    filename = "source" + _extension(upload.filename)
-    rel_path, size_bytes, sha256 = await storage.save_upload_stream(
+    ext = _extension(upload.filename)
+
+    # Пишем во временный файл с уникальным именем: валидация не должна затирать
+    # уже загруженное видео, если новая попытка окажется невалидной.
+    staged_rel, size_bytes, sha256 = await storage.save_upload_stream(
         upload,
         room.id,
-        "original",
-        filename=filename,
+        "tmp",
+        filename=f"upload-{uuid4().hex}{ext}",
         max_bytes=settings.max_upload_bytes,
     )
-    abs_path = storage.absolute(rel_path)
+    staged = storage.absolute(staged_rel)
 
     try:
-        info = probe.validate_upload(abs_path)
+        info = probe.validate_upload(staged)
     except Exception:
-        abs_path.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
         raise
+
+    # Валидный файл занимает своё место атомарно
+    final_rel = room_relative(room.id, "original", f"source{ext}")
+    final_path = storage.absolute(final_rel)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(staged, final_path)
+    rel_path = final_rel
 
     video = Video(
         room_id=room.id,
