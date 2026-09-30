@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     assignment_ttl_minutes: int = 15
     assignment_heartbeat_grace_s: int = 60
 
+    # Обработка не должна зависать, если воркер для очереди не поднят
+    job_stage_stall_minutes: int = 20
+    maintenance_interval_s: int = 120
+
     # --- запись ---
     record_tolerance_ms: int = 250
     record_loudness_target: int = -16

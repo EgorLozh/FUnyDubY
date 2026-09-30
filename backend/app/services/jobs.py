@@ -380,6 +380,18 @@ async def enqueue_first_stage(job_id: uuid.UUID, queue: str = "cpu") -> None:
     _send("extract_audio", str(job_id), queue=queue)
 
 
+def stage_actor(stage: str):
+    """Получить актор этапа (используется реконсилятором для переотправки)."""
+    import dramatiq
+
+    from app.workers import tasks  # noqa: F401 — регистрирует акторы
+
+    actor = dramatiq.get_broker().get_actor(STAGE_ACTORS[stage])
+    if actor is None:
+        raise Conflict(f"Актор {STAGE_ACTORS[stage]} не зарегистрирован", code="actor_missing")
+    return actor
+
+
 async def cancel_job(session: AsyncSession, job: ProcessingJob) -> ProcessingJob:
     job.status = JobStatus.CANCELED
     job.finished_at = datetime.now(UTC)

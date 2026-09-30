@@ -34,11 +34,17 @@ async def lifespan(_: FastAPI):
         diarization_model=settings.diarization_model,
         hf_token=bool(settings.hf_token),
     )
+    # Запустить самопланирующийся реконсилятор очереди (идемпотентно через Redis-ключ)
+    try:
+        from app.workers.tasks.maintenance import bootstrap as maintenance_bootstrap
+
+        maintenance_bootstrap()
+    except Exception as exc:  # noqa: BLE001 — обслуживание не должно мешать API стартовать
+        log.warning("maintenance_bootstrap_skipped", error=str(exc))
     yield
     await close_redis()
     await engine.dispose()
     log.info("app_stop")
-
 
 app = FastAPI(
     title="Collaborative Video Dubbing Platform",
