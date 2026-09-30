@@ -96,7 +96,7 @@ check "11-минутное видео -> 422 video_too_long" 422 \
   "$(code -X POST "$BASE/rooms/$ROOM/video?replace=1" -H "X-Participant-Token: $TOKEN" -F "file=@$TMPD/toolong.mp4")"
 check "AVI -> 415 unsupported_format" 415 \
   "$(code -X POST "$BASE/rooms/$ROOM/video?replace=1" -H "X-Participant-Token: $TOKEN" -F "file=@$TMPD/bad.avi")"
-check "мусорный файл -> 415/422" 415 \
+check "мусорный файл -> 422 corrupt_media" 422 \
   "$(code -X POST "$BASE/rooms/$ROOM/video?replace=1" -H "X-Participant-Token: $TOKEN" -F "file=@/etc/hostname;filename=junk.mp4")"
 check "видео всё ещё на месте после отказов" 200 "$(code "$BASE/rooms/$ROOM/video")"
 rm -rf "$TMPD"
