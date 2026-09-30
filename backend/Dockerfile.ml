@@ -2,8 +2,10 @@
 #
 # Базовый образ — Ubuntu 24.04: в нём уже есть python3.12, тогда как в ubuntu22.04
 # пакет python3.12 отсутствует и сборка падает на apt (проверено).
+# Тег 12.4.1 для ubuntu24.04 не существует (24.04 начинается с 12.6) — берём 12.6.3:
+# torch ставится из индекса cu124 и несёт свои CUDA-библиотеки, драйвер 595.x их принимает.
 # pip ставится в venv: в 24.04 системный pip заблокирован PEP 668.
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
