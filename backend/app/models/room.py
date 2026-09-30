@@ -49,10 +49,20 @@ class Room(Base, TimestampMixin):
     )
     settings: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     video_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("videos.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        # use_alter: разрывает цикл rooms <-> videos в миграции (FK создаётся отдельным ALTER)
+        ForeignKey("videos.id", ondelete="SET NULL", use_alter=True, name="fk_rooms_video_id"),
+        nullable=True,
     )
     owner_participant_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("participants.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey(
+            "participants.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_rooms_owner_participant_id",
+        ),
+        nullable=True,
     )
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
