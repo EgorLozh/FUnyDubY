@@ -207,22 +207,24 @@ def subtract(
     background = np.clip(background, -1.0, 1.0)
 
     background_audio = Audio(background, mix_cut.sample_rate)
-    leak_db = _residual_leak_db(mix_cut, background_audio, sample_mask)
+    leak_db, duck_db = speech_leak_db(mix_cut, speech_cut, background_audio, sample_mask)
 
     if mode in ("subtract_and_duck", "stems_sum"):
         background_audio = duck_background(background_audio, sample_mask, ducking_db)
 
     quality = {
-        "residual_speech_db": round(leak_db, 2),
+        "speech_leak_db": round(leak_db, 2),
+        "bg_level_in_speech_db": round(duck_db, 2),
         "alpha": round(alpha, 3),
         "mix_rms_db": round(rms_db(mix_cut), 2),
         "background_rms_db": round(rms_db(background_audio), 2),
         "background_peak_db": round(peak_db(background_audio), 2),
         "speech_rms_db": round(rms_db(speech_cut), 2),
+        "ducking_db": ducking_db,
     }
-    if leak_db > -15.0:
+    if leak_db > -20.0:
         quality["degraded"] = True
-        log.warning("separation_degraded", residual_speech_db=round(leak_db, 2), alpha=alpha)
+        log.warning("separation_degraded", speech_leak_db=round(leak_db, 2), alpha=alpha)
     return SeparationResult(
         speech=speech_cut,
         background=background_audio,
@@ -233,30 +235,52 @@ def subtract(
     )
 
 
-def _residual_leak_db(mix: Audio, background: Audio, mask: np.ndarray) -> float:
-    """Метрика «призрака»: сколько энергии микса осталось в фоне в зонах речи.
+def speech_leak_db(mix: Audio, speech: Audio, background: Audio, mask: np.ndarray) -> float:
+    """Сколько самой речи осталось в фоне — проекция фона на оценку речи.
 
-    Сравниваем энергию фона в речевых окнах с энергией самого микса там же:
-    чем сильнее подавлено, тем ближе это значение к ‑∞ (на практике — к ‑20…-40 дБ).
-    Все три массива обрезаются по общей длине: маска строится целыми окнами,
-    поэтому последний «хвост» короче на величину остатка от деления.
+    Прежняя версия метрики делила энергию фона на энергию микса в зонах речи и потому
+    измеряла громкость музыки, а не утечку голоса: громкий саундтрек давал «плохое»
+    значение даже у идеального разделения. Здесь считается корреляционная проекция:
+
+        α = <фон, речь> / <речь, речь>   →   20·log10|α|
+
+    Если речи в фоне нет, α близко к нулю (десятки отрицательных дБ); если фон содержит
+    «призрак» голоса — α приближается к 0 дБ. Рядом возвращается `bg_duck_db` — насколько
+    фон в зонах речи тише, чем вне их (нужно для решения о дуккинге).
     """
-    mix_samples = mix.mono().samples
-    bg_samples = background.mono().samples
-    n = min(len(mix_samples), len(bg_samples), len(mask))
+    mix_samples = mix.mono().samples.astype(np.float64)
+    speech_samples = speech.mono().samples.astype(np.float64)
+    bg_samples = background.mono().samples.astype(np.float64)
+    n = min(len(mix_samples), len(speech_samples), len(bg_samples), len(mask))
     if n == 0:
-        return -120.0
-    mix_samples = mix_samples[:n]
-    bg_samples = bg_samples[:n]
-    mask = mask[:n]
-    if not mask.any():
-        return -120.0
-    mix_energy = float(np.sum(np.square(mix_samples[mask].astype(np.float64))))
-    bg_energy = float(np.sum(np.square(bg_samples[mask].astype(np.float64))))
-    if mix_energy <= 1e-12:
-        return -120.0
-    ratio = max(bg_energy, 1e-20) / mix_energy
-    return float(10 * np.log10(max(ratio, 1e-12)))
+        return -120.0, 0.0
+
+    window = mask[:n].astype(bool)
+    if not window.any():
+        return -120.0, 0.0
+
+    speech_window = speech_samples[:n][window]
+    background_window = bg_samples[:n][window]
+    denominator = float(np.dot(speech_window, speech_window))
+    if denominator <= 1e-12:
+        return -120.0, 0.0
+
+    alpha = float(np.dot(background_window, speech_window) / denominator)
+    leak = 20 * np.log10(max(abs(alpha), 1e-6))
+
+    outside = ~window
+    if outside.any():
+        inside_rms = float(np.sqrt(np.mean(np.square(background_window))))
+        outside_rms = float(np.sqrt(np.mean(np.square(bg_samples[:n][outside]))))
+        duck = 20 * np.log10(max(inside_rms, 1e-9) / max(outside_rms, 1e-9))
+    else:
+        duck = 0.0
+    return float(leak), float(duck)
+
+
+def _speech_leak_only(mix: Audio, speech: Audio, background: Audio, mask: np.ndarray) -> float:
+    """Удобная обёртка, когда нужна только утечка."""
+    return speech_leak_db(mix, speech, background, mask)[0]
 
 
 def from_stems(mix: Audio, stems: dict[str, Audio], *, ducking_db: float) -> SeparationResult:
@@ -291,8 +315,10 @@ def from_stems(mix: Audio, stems: dict[str, Audio], *, ducking_db: float) -> Sep
     mask_frames = speech_activity_mask(mix_cut, speech_cut, hop_ms=50)
     sample_mask = expand_mask_to_samples(mask_frames, hop, n)
 
+    leak_db, duck_db = speech_leak_db(mix_cut, speech_cut, background_cut, sample_mask)
     quality = {
-        "residual_speech_db": round(_residual_leak_db(mix_cut, background_cut, sample_mask), 2),
+        "speech_leak_db": round(leak_db, 2),
+        "bg_level_in_speech_db": round(duck_db, 2),
         "alpha": None,
         "mix_rms_db": round(rms_db(mix_cut), 2),
         "background_rms_db": round(rms_db(background_cut), 2),
@@ -305,7 +331,7 @@ def from_stems(mix: Audio, stems: dict[str, Audio], *, ducking_db: float) -> Sep
     }
     if ducking_db < 0:
         background_cut = duck_background(background_cut, sample_mask, ducking_db)
-    if quality["residual_speech_db"] > -15.0:
+    if leak_db > -20.0:
         quality["degraded"] = True
         log.warning("separation_degraded", **{"backend": "bandit_v2", **quality})
     return SeparationResult(
