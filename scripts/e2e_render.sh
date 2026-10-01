@@ -14,6 +14,7 @@ PASS=0
 FAIL=0
 
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)" 2>/dev/null; }
+code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 ok() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf '  FAIL %s (ждали «%s», получили «%s»)\n' "$1" "$2" "$3"; }
 check() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "$2" "$3"; }
