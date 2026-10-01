@@ -148,9 +148,18 @@ async def create_or_reset_job(
         job.finished_at = None
         await session.flush()
 
-    stages_to_reset = STAGE_ORDER if scope == "all" else [
-        stage for stage in STAGE_ORDER if stage.value == scope
-    ]
+    # Явный scope перезапускает указанный этап И все последующие: их входные данные меняются
+    # (например, после повторной диаризации нарезку реплик нужно пересобрать).
+    if scope == "all":
+        stages_to_reset = list(STAGE_ORDER)
+        force = False
+    else:
+        index = next((i for i, s in enumerate(STAGE_ORDER) if s.value == scope), None)
+        if index is None:
+            raise Conflict(f"Неизвестный этап: {scope}", code="unknown_stage")
+        stages_to_reset = STAGE_ORDER[index:]
+        force = True
+
     for stage in stages_to_reset:
         row = (
             await session.execute(
@@ -167,7 +176,7 @@ async def create_or_reset_job(
                     progress=0,
                 )
             )
-        elif row.status != StageStatus.DONE:
+        elif force or row.status != StageStatus.DONE:
             row.status = StageStatus.PENDING
             row.progress = 0
             row.error = None
