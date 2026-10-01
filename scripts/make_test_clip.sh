@@ -16,10 +16,14 @@ if [ ! -f clip.mp4 ]; then
   curl -s -o spk2.flac https://cdn-media.huggingface.co/speech_samples/sample2.flac
   curl -s -o spk3.flac https://cdn-media.huggingface.co/speech_samples/sample3.flac 2>/dev/null || cp spk2.flac spk3.flac
 
-  MUSIC_URL=$(curl -s "https://commons.wikimedia.org/w/api.php?action=query&titles=File:PhiladelphiaSymphonyOrchestra-DanseMacabre.ogg&prop=imageinfo&iiprop=url&format=json" \
+  MUSIC_URL=$(curl -s -A "FUnyDubY-e2e/1.0 (test fixture)" "https://commons.wikimedia.org/w/api.php?action=query&titles=File:PhiladelphiaSymphonyOrchestra-DanseMacabre.ogg&prop=imageinfo&iiprop=url&format=json" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); print(list(d['query']['pages'].values())[0]['imageinfo'][0]['url'])")
-  echo "музыка: $MUSIC_URL"
-  curl -s -o music.ogg "$MUSIC_URL"
+  echo "музыка: ${MUSIC_URL%%\?*}"
+  # Wikimedia отдаёт 403 без внятного User-Agent — заголовок обязателен
+  MUSIC_CODE=$(curl -s -A "FUnyDubY-e2e/1.0 (test fixture; https://example.invalid)" -w '%{http_code}' -o music.ogg "$MUSIC_URL")
+  echo "скачивание музыки: HTTP $MUSIC_CODE, $(stat -c%s music.ogg 2>/dev/null || echo 0) байт"
+  [ "$MUSIC_CODE" = "200" ] && [ "$(stat -c%s music.ogg 2>/dev/null || echo 0)" -gt 100000 ] || {
+    echo "Не удалось скачать музыкальный фон"; exit 1; }
 
   echo "== сборка клипа: спикер 1 (0.5-12 c), спикер 2 (11.5-24 c, с наложением), музыка на фоне =="
   ffmpeg -nostdin -v error -y \
