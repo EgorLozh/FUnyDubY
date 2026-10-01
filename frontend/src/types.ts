@@ -139,6 +139,20 @@ export type BulkAssignment = {
   busy: string[]
 }
 
+export type Recording = {
+  id: string
+  line_id: string
+  participant_id: string | null
+  take_number: number
+  status: string
+  is_current: boolean
+  duration_ms: number | null
+  size_bytes: number
+  loudness_lufs: number | null
+  rejected_reason: string | null
+  created_at: string
+}
+
 export type RoomEvent = {
   id?: number
   type: string

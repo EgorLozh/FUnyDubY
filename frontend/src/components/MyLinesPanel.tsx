@@ -1,16 +1,19 @@
 /**
- * «Мои реплики» — рабочее место участника.
+ * «Мои реплики» — рабочее место участника: прослушать оригинал, записать свой голос, выбрать
+ * актуальный тейк.
  *
- * Показывает только то, что человек взял: реплику, её оригинал и кнопку записи.
- * Захват продлевается heartbeat-ом, пока панель открыта, — иначе через 15 минут
- * (assignment_ttl_minutes) реплика освободится и её сможет взять кто-то другой.
+ * Запись ограничена длительностью реплики: рекордер останавливается сам ровно на её конце,
+ * а сервер повторно проверяет длительность и нормализует тейк до точной длины. Захват реплики
+ * продлевается heartbeat-ом, пока панель открыта, — иначе через `assignment_ttl_minutes`
+ * реплика освободится и её сможет взять кто-то другой.
  */
 
-import { useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { api, media } from '../api/client'
+import { extensionFor, useRecorder } from '../hooks/useRecorder'
 import { formatPrecise } from './VideoPlayer'
-import type { Line } from '../types'
+import type { ApiError, Line, Recording } from '../types'
 
 const HEARTBEAT_MS = 5 * 60 * 1000
 
@@ -45,11 +48,7 @@ export function MyLinesPanel({
   }, [roomId, myId, mine.map((line) => line.id).join(',')])
 
   if (!myId) {
-    return (
-      <div className="empty">
-        Войдите в комнату под своим именем — тогда можно взять реплики.
-      </div>
-    )
+    return <div className="empty">Войдите в комнату под своим именем — тогда можно взять реплики.</div>
   }
 
   return (
@@ -61,58 +60,221 @@ export function MyLinesPanel({
         </div>
       )}
       {mine.map((line) => (
-        <div key={line.id} className={`line stack mine${line.id === activeLineId ? ' current' : ''}`}>
-          <div>
-            <div className="time">{formatPrecise(line.start_ms)}</div>
-            <div className="time small">{(line.duration_ms / 1000).toFixed(1)} с</div>
-          </div>
-          <div>
-            <div className="speaker">{line.speaker_label}</div>
-            <div className="text">{line.text || <span className="muted">— нет текста —</span>}</div>
-            {line.has_recording ? (
-              <div className="meta">
-                <span className="badge ok">записано</span>
-                <audio controls src={media.url(roomId, 'recording', line.id)} />
-              </div>
-            ) : (
-              <div className="meta">
-                <span className="badge">не записано</span>
-              </div>
-            )}
-          </div>
-          <div className="actions">
-            <button
-              disabled={!line.has_original_audio}
-              onClick={() => onPlayOriginal(line.id)}
-              title="Прослушать оригинал"
-            >
-              ▶ оригинал
-            </button>
-            <button onClick={() => onSeek(line.start_ms, line.end_ms)}>Найти в видео</button>
-            <button
-              className="primary"
-              disabled
-              title="Запись голоса с микрофона — следующий этап разработки"
-            >
-              Записать
-            </button>
-            <button
-              className="ghost"
-              onClick={async () => {
-                try {
-                  await api.releaseLine(roomId, line.id)
-                  notify('Реплика освобождена', true)
-                  onChanged()
-                } catch {
-                  notify('Не удалось освободить реплику')
-                }
-              }}
-            >
-              Отдать
-            </button>
-          </div>
-        </div>
+        <MyLine
+          key={line.id}
+          roomId={roomId}
+          line={line}
+          isActive={line.id === activeLineId}
+          onSeek={onSeek}
+          onPlayOriginal={onPlayOriginal}
+          onChanged={onChanged}
+          notify={notify}
+        />
       ))}
+    </div>
+  )
+}
+
+function MyLine({
+  roomId,
+  line,
+  isActive,
+  onSeek,
+  onPlayOriginal,
+  onChanged,
+  notify,
+}: {
+  roomId: string
+  line: Line
+  isActive: boolean
+  onSeek: (startMs: number, endMs: number) => void
+  onPlayOriginal: (lineId: string) => void
+  onChanged: () => void
+  notify: (message: string, ok?: boolean) => void
+}) {
+  const [takes, setTakes] = useState<Recording[]>([])
+  const [busy, setBusy] = useState(false)
+
+  const loadTakes = useCallback(async () => {
+    try {
+      setTakes(await api.listTakes(roomId, line.id))
+    } catch {
+      /* список тейков вторичен: ошибку показывать не нужно */
+    }
+  }, [roomId, line.id])
+
+  useEffect(() => {
+    void loadTakes()
+  }, [loadTakes, line.has_recording, line.version])
+
+  const recorder = useRecorder({
+    limitMs: line.duration_ms,
+    onRecorded: async (blob, mimeType) => {
+      try {
+        await api.uploadTake(
+          roomId,
+          line.id,
+          blob,
+          {
+            idempotencyKey: `${line.id}:${Date.now()}`,
+            filename: `take-${line.id.slice(0, 8)}.${extensionFor(mimeType)}`,
+          },
+          () => undefined,
+        )
+        notify(`Реплика озвучена (${(blob.size / 1024).toFixed(0)} КБ)`, true)
+        await loadTakes()
+        onChanged()
+      } catch (exc) {
+        const error = exc as ApiError
+        notify(error.hint ?? 'Не удалось сохранить запись')
+        throw error
+      }
+    },
+  })
+
+  const current = takes.find((take) => take.is_current)
+  const recording = recorder.status === 'recording'
+  const elapsed = Math.min(recorder.elapsedMs, recorder.limitMs)
+  const leftMs = Math.max(0, recorder.limitMs - elapsed)
+
+  return (
+    <div className={`line stack mine${isActive ? ' current' : ''}`}>
+      <div>
+        <div className="time">{formatPrecise(line.start_ms)}</div>
+        <div className="time small">{(line.duration_ms / 1000).toFixed(1)} с</div>
+      </div>
+
+      <div>
+        <div className="speaker">{line.speaker_label}</div>
+        <div className="text">{line.text || <span className="muted">— нет текста —</span>}</div>
+
+        <div className="meta">
+          {current ? <span className="badge ok">записано: тейк {current.take_number}</span> : <span className="badge">не записано</span>}
+          {line.overlaps && <span className="badge warn">перекрытие</span>}
+        </div>
+
+        {recording && (
+          <div style={{ marginTop: '0.5rem' }}>
+            <div className="row small">
+              <span style={{ color: 'var(--accent)' }}>● запись</span>
+              <span className="time">
+                {(elapsed / 1000).toFixed(1)} / {(recorder.limitMs / 1000).toFixed(1)} с
+              </span>
+              <span className="muted">осталось {(leftMs / 1000).toFixed(1)} с</span>
+            </div>
+            <div className="progress" style={{ marginTop: '0.25rem' }}>
+              <span style={{ width: `${Math.min(100, (elapsed / recorder.limitMs) * 100)}%` }} />
+            </div>
+            <div className="progress" style={{ marginTop: '0.25rem' }} title="уровень микрофона">
+              <span style={{ width: `${Math.round(recorder.level * 100)}%`, opacity: 0.6 }} />
+            </div>
+          </div>
+        )}
+
+        {recorder.error && (
+          <div className="small" style={{ color: 'var(--accent)', marginTop: '0.3rem' }}>
+            {recorder.error}
+          </div>
+        )}
+
+        {current && (
+          <audio
+            controls
+            preload="none"
+            style={{ marginTop: '0.4rem', width: '100%' }}
+            src={media.url(roomId, 'recording', line.id)}
+          />
+        )}
+
+        {takes.length > 1 && (
+          <div className="row small" style={{ marginTop: '0.4rem', gap: '0.35rem' }}>
+            <span className="muted">тейки:</span>
+            {takes.map((take) => (
+              <span key={take.id} className="row" style={{ gap: '0.2rem' }}>
+                <button
+                  className={take.is_current ? 'primary' : 'ghost'}
+                  disabled={busy || take.is_current}
+                  title={`Сделать актуальным тейк ${take.take_number}`}
+                  onClick={async () => {
+                    setBusy(true)
+                    try {
+                      await api.makeTakeCurrent(roomId, line.id, take.id)
+                      notify(`Актуальный тейк: ${take.take_number}`, true)
+                      await loadTakes()
+                      onChanged()
+                    } catch {
+                      notify('Не удалось переключить тейк')
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                >
+                  #{take.take_number}
+                </button>
+                <button
+                  className="ghost"
+                  disabled={busy}
+                  title="Удалить тейк"
+                  onClick={async () => {
+                    setBusy(true)
+                    try {
+                      await api.deleteTake(roomId, line.id, take.id)
+                      notify(`Тейк ${take.take_number} удалён`, true)
+                      await loadTakes()
+                      onChanged()
+                    } catch {
+                      notify('Не удалось удалить тейк')
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="actions">
+        {recording ? (
+          <button className="primary" onClick={recorder.stop}>
+            Стоп
+          </button>
+        ) : (
+          <button
+            className="primary"
+            disabled={recorder.status === 'uploading' || recorder.status === 'requesting'}
+            onClick={() => void recorder.start()}
+            title={`Запись ограничена длительностью реплики: ${(line.duration_ms / 1000).toFixed(1)} с`}
+          >
+            {recorder.status === 'uploading'
+              ? 'Отправка…'
+              : current
+                ? 'Перезаписать'
+                : `🎙 Записать (${(line.duration_ms / 1000).toFixed(1)} с)`}
+          </button>
+        )}
+        <button disabled={!line.has_original_audio} onClick={() => onPlayOriginal(line.id)}>
+          ▶ оригинал
+        </button>
+        <button onClick={() => onSeek(line.start_ms, line.end_ms)}>Найти в видео</button>
+        <button
+          className="ghost"
+          onClick={async () => {
+            try {
+              await api.releaseLine(roomId, line.id)
+              notify('Реплика освобождена', true)
+              onChanged()
+            } catch {
+              notify('Не удалось освободить реплику')
+            }
+          }}
+        >
+          Отдать
+        </button>
+      </div>
     </div>
   )
 }

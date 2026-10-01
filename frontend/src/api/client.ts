@@ -14,6 +14,7 @@ import {
   type Line,
   type Participant,
   type ParticipantRegistered,
+  type Recording,
   type Room,
   type RoomCreated,
   type Speaker,
@@ -266,6 +267,71 @@ export const api = {
   heartbeatLine(roomId: string, lineId: string): Promise<Assignment> {
     return request<Assignment>(`/rooms/${roomId}/lines/${lineId}/assignment/heartbeat`, {
       body: {},
+      roomId,
+    })
+  },
+
+  // ---------------------------------------------------------------- тейки озвучки
+
+  /** Загрузка тейка: фиксированный Idempotency-Key защищает от дубля при двойном клике. */
+  uploadTake(
+    roomId: string,
+    lineId: string,
+    blob: Blob,
+    options: { idempotencyKey: string; filename?: string },
+    onProgress?: (percent: number) => void,
+  ): Promise<Recording> {
+    return new Promise((resolve, reject) => {
+      const form = new FormData()
+      form.append('file', blob, options.filename ?? 'take.webm')
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API_BASE}/rooms/${roomId}/lines/${lineId}/recordings`)
+      const token = session.token(roomId)
+      if (token) xhr.setRequestHeader('X-Participant-Token', token)
+      xhr.setRequestHeader('Idempotency-Key', options.idempotencyKey)
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) {
+          onProgress(Math.round((event.loaded / event.total) * 100))
+        }
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText) as Recording)
+          return
+        }
+        try {
+          const body = JSON.parse(xhr.responseText) as Record<string, unknown>
+          reject(
+            new ApiError(
+              xhr.status,
+              String(body.code ?? 'http_error'),
+              String(body.title ?? xhr.statusText),
+              body,
+            ),
+          )
+        } catch {
+          reject(new ApiError(xhr.status, 'http_error', xhr.statusText))
+        }
+      }
+      xhr.onerror = () => reject(new ApiError(0, 'network_error', 'Сеть недоступна'))
+      xhr.send(form)
+    })
+  },
+
+  listTakes(roomId: string, lineId: string): Promise<Recording[]> {
+    return request<Recording[]>(`/rooms/${roomId}/lines/${lineId}/recordings`, { roomId })
+  },
+
+  makeTakeCurrent(roomId: string, lineId: string, recordingId: string): Promise<Recording> {
+    return request<Recording>(
+      `/rooms/${roomId}/lines/${lineId}/recordings/${recordingId}/current`,
+      { body: {}, roomId },
+    )
+  },
+
+  deleteTake(roomId: string, lineId: string, recordingId: string): Promise<void> {
+    return request<void>(`/rooms/${roomId}/lines/${lineId}/recordings/${recordingId}`, {
+      method: 'DELETE',
       roomId,
     })
   },
