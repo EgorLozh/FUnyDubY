@@ -48,7 +48,9 @@ async def upload_video(
             code="video_exists",
         )
 
-    storage.ensure_space(settings.max_upload_bytes)
+    # Место проверяется по ходу потоковой записи (см. save_upload_stream): резервировать
+    # max_upload целиком на почти полном диске нельзя — падали бы даже мелкие загрузки.
+    storage.ensure_space()
     ext = _extension(upload.filename)
 
     # Пишем во временный файл с уникальным именем: валидация не должна затирать

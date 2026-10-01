@@ -102,6 +102,10 @@ async def save_upload_stream(
                         f"Файл больше допустимого размера ({max_bytes // (1024 * 1024)} МБ)",
                         extra={"limit_bytes": max_bytes},
                     )
+                # Место проверяем по ходу записи, а не «резервируем max_upload заранее»:
+                # иначе на почти полном диске падают даже крошечные загрузки.
+                if written % (CHUNK * 16) < CHUNK:
+                    ensure_space()
                 digest.update(chunk)
                 await fh.write(chunk)
             await fh.flush()
