@@ -76,7 +76,30 @@ async def _reconcile() -> dict[str, int]:
                 log.warning("job_stalled", job_id=str(job.id), stage=running[0].stage.value)
                 continue
 
-            # 2. всё сделано, но джоб не закрыт
+            # 2. потерянная задача: джоб в работе, но ни один этап не выполняется,
+            #    а среди этапов есть незавершённые (сообщение потеряно или истекло по AgeLimit)
+            if (
+                job.status == JobStatus.RUNNING
+                and not running
+                and not all(s.status in (StageStatus.DONE, StageStatus.SKIPPED) for s in stages)
+            ):
+                pending = next(
+                    (s for s in stages if s.status in (StageStatus.PENDING, StageStatus.RUNNING)),
+                    None,
+                )
+                created = job.updated_at or job.created_at
+                if pending is not None and created and now - created > stall:
+                    try:
+                        stage_actor(pending.stage.value).send(str(job.id))
+                        stats["requeued"] += 1
+                        log.warning(
+                            "job_requeued_after_loss", job_id=str(job.id), stage=pending.stage.value
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        log.error("requeue_failed", job_id=str(job.id), error=str(exc))
+                continue
+
+            # 3. всё сделано, но джоб не закрыт
             if stages and all(
                 s.status in (StageStatus.DONE, StageStatus.SKIPPED) for s in stages
             ):

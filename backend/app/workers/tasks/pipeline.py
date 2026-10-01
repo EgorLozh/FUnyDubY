@@ -65,10 +65,36 @@ def separate_speech(job_id: str) -> None:
     asyncio.run(run_stage(uuid.UUID(job_id), StageName.SEPARATE_SPEECH, _separate_speech))
 
 
-async def _separate_speech(_env: StageEnv, _session: Any) -> dict[str, Any]:
-    raise StageNotImplemented(
-        "Отделение речи появится вместе с моделями (следующий шаг): Bandit v2 или Demucs",
+async def _separate_speech(env: StageEnv, _session: Any) -> dict[str, Any]:
+    """Отделение речи (D1/D2) + формирование фона вычитанием с дуккингом."""
+    from app.ml import separation
+
+    mix = env.path("audio", "mix.wav")
+    if not mix.exists():
+        raise ArtifactsMissing("Нет audio/mix.wav — этап extract_audio не выполнен")
+
+    speech_out = env.path("speech", "speech.wav")
+    background_out = env.path("speech", "background.wav")
+    await env.progress_cb(5)
+
+    result = await asyncio.to_thread(
+        separation.separate_file,
+        mix,
+        speech_out,
+        background_out,
+        mode=env.room_settings.get("separation_mode"),
+        ducking_db=env.room_settings.get("ducking_db"),
+        fallback=True,
     )
+    await env.progress_cb(95)
+    return {
+        "speech": env.rel("speech", "speech.wav"),
+        "background": env.rel("speech", "background.wav"),
+        "backend": result.backend,
+        "mode": result.mode,
+        "alpha": result.alpha,
+        "quality": result.quality,
+    }
 
 
 @dramatiq.actor(queue_name="gpu", max_retries=1, time_limit=900_000)
@@ -76,8 +102,33 @@ def transcribe(job_id: str) -> None:
     asyncio.run(run_stage(uuid.UUID(job_id), StageName.TRANSCRIBE, _transcribe))
 
 
-async def _transcribe(_env: StageEnv, _session: Any) -> dict[str, Any]:
-    raise StageNotImplemented("Транскрипция появится вместе с faster-whisper (следующий шаг)")
+async def _transcribe(env: StageEnv, _session: Any) -> dict[str, Any]:
+    """Транскрипция дорожки речи в word-level JSON."""
+    from app.ml import stt
+
+    speech = env.path("speech", "speech.wav")
+    if not speech.exists():
+        raise ArtifactsMissing("Нет speech/speech.wav — этап отделения речи не выполнен")
+
+    await env.progress_cb(5)
+    result = await asyncio.to_thread(
+        stt.transcribe_file,
+        speech,
+        env.path("dialogue", "words.json"),
+        backend=env.room_settings.get("stt_backend"),
+        language=(env.room_settings.get("stt_language") or None),
+        initial_prompt=(env.room_settings.get("stt_prompt") or None),
+    )
+    await env.progress_cb(95)
+    if not result.words:
+        raise DomainError("Речь не распознана — возможно, в видео нет диалогов", code="stt_empty")
+    return {
+        "words": len(result.words),
+        "language": result.language,
+        "model": result.model,
+        "backend": result.backend,
+        "degraded": result.degraded,
+    }
 
 
 @dramatiq.actor(queue_name="gpu", max_retries=1, time_limit=900_000)
@@ -85,8 +136,30 @@ def diarize(job_id: str) -> None:
     asyncio.run(run_stage(uuid.UUID(job_id), StageName.DIARIZE, _diarize))
 
 
-async def _diarize(_env: StageEnv, _session: Any) -> dict[str, Any]:
-    raise StageNotImplemented("Диаризация появится вместе с pyannote (следующий шаг)")
+async def _diarize(env: StageEnv, _session: Any) -> dict[str, Any]:
+    """Диаризация дорожки речи. Сбой деградирует (все Speaker 1), а не роняет джоб."""
+    from app.ml import diarization
+
+    speech = env.path("speech", "speech.wav")
+    if not speech.exists():
+        raise ArtifactsMissing("Нет speech/speech.wav — этап отделения речи не выполнен")
+
+    max_speakers = env.room_settings.get("max_speakers") or None
+    result = await asyncio.to_thread(
+        diarization.diarize_file,
+        speech,
+        env.path("dialogue", "diarization.json"),
+        num_speakers=int(max_speakers) if max_speakers else None,
+        max_speakers=None,
+        allow_degradation=True,
+    )
+    return {
+        "turns": len(result.turns),
+        "speakers": result.speakers,
+        "backend": result.backend,
+        "degraded": result.degraded,
+        "reason": result.reason,
+    }
 
 
 # ---------------------------------------------------------------- merge_dialogue
