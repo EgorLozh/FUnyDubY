@@ -14,7 +14,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import dramatiq
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -95,6 +95,13 @@ async def _reconcile() -> dict[str, int]:
                     "stage": running[0].stage.value,
                     "message": "Обработка прервана: этап слишком долго не отвечает",
                 }
+                # Застрявший разбор тоже снимает «в обработке» с комнаты, иначе интерфейс
+                # показывает бесконечную обработку и участник ждёт впустую.
+                await session.execute(
+                    update(Room)
+                    .where(Room.id == job.room_id, Room.status == RoomStatus.PROCESSING)
+                    .values(status=RoomStatus.FAILED)
+                )
                 stats["stalled"] += 1
                 log.warning("job_stalled", job_id=str(job.id), stage=running[0].stage.value)
                 continue

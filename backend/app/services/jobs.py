@@ -374,6 +374,14 @@ async def run_stage(
                     finished_at=datetime.now(UTC),
                 )
             )
+            # Комната не имеет права навсегда остаться «в обработке»: если разбор упал, это
+            # должно быть видно в интерфейсе. Готовую комнату не трогаем — одиночный этап
+            # могли перезапускать, и падение перезапуска не отменяет уже собранный результат.
+            await session.execute(
+                update(Room)
+                .where(Room.id == job.room_id, Room.status == RoomStatus.PROCESSING)
+                .values(status=RoomStatus.FAILED)
+            )
             await session.commit()
             await _publish(
                 job.room_id,
