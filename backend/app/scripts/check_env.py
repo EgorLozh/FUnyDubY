@@ -69,6 +69,11 @@ def validate_runtime() -> list[str]:
     database_url = os.environ.get("DATABASE_URL", "")
     if database_url and GLUE_RE.search(database_url.split("://", 1)[-1]):
         problems.append("в DATABASE_URL найдено склеенное значение — проверьте .env")
+    if database_url.startswith("postgresql") and "ssl=" not in database_url:
+        problems.append(
+            "в DATABASE_URL нет параметра ssl — внешний PostgreSQL ждёт TLS "
+            "(pg_hba разрешает только hostssl), добавьте ?ssl=require"
+        )
     return problems
 
 

@@ -59,11 +59,17 @@ docker compose logs --tail=50 worker-cpu
 | `alembic downgrade base` оставил таблицы/FK в неполном виде, `upgrade` падает | оборванная транзакция DDL | `make db-rebuild` (downgrade base + upgrade head) или жёстко: `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` затем `alembic upgrade head` |
 | FK `rooms -> videos/participants` отсутствуют после чистой схемы | автогенерация пропускает связи, помеченные `use_alter=True` | они добавлены в миграцию руками (`op.create_foreign_key` в конце `initial_schema`) — если правите модели, проверяйте наличие этих двух FK после пересборки |
 | HF-модели отвечают 401 `Invalid username or password` / gated-репозиторий недоступен, хотя токен «точно есть» | `.env` склеен: значение без завершающего перевода строки, и следующая строка приклеилась к нему (`HF_TOKEN=hf_…DATABASE_URL=postgresql://…`). Тот же эффект даёт `tr -d '\r'` в файле с CR-переводами: строки сливаются в одну | `make check-env` (или `python -m app.scripts.check_env .env`) покажет склейку и подозрительную длину токена; править файл целиком (write, не `>>`), каждую пару «ключ=значение» — отдельной строкой |
+| `asyncpg ... no pg_hba.conf entry for host "172.1x.0.x", user "dubbing", database "dubbing", no encryption` | в `DATABASE_URL` нет `?ssl=require`, а `pg_hba.conf` этого Postgres разрешает внешним адресам только `hostssl` | добавить `?ssl=require` (проверяется в `make check-env`); после пересоздания docker-сети контейнер получает другой адрес из диапазона 172.x, поэтому правило не «сломалось» — дело в TLS |
+| GPU-воркер: `UnpicklingError: Weights only load failed` при загрузке pyannote | torch ≥ 2.6 грузит чекпоинты с `weights_only=True`, а у pyannote старый pickle-формат | переменная `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` в окружении воркера (уже задана в compose и Dockerfile.ml); чекпоинты берутся из доверенных источников (HF) |
 | Нужно нормализовать переводы строк в `.env` | `tr -d '\r'` удаляет CR **вместе с разделителем**, если файл был с CR-переводами | `python -c "import pathlib;p=pathlib.Path('.env');p.write_text(p.read_text().replace('\r\n','\n').replace('\r','\n'))"` |
 | `git pull` на сервере падает: `untracked working tree files would be overwritten by merge` | в рабочем дереве лежит сгенерированный файл (миграция, дамп) | `git status --short`, затем `rm` лишнего или `git checkout -- .` перед pull |
 
 ## Известные ограничения текущего состояния
 
-* `worker-gpu` не поднят: нет nvidia-container-toolkit (нужен для ML-этапов).
-* Схема БД создана, но обработка видео ещё не реализована — этапы 4-14 roadmap.
+* Модель разделения речи по решению D1 — Bandit v2, но её веса (Zenodo) и код автора ещё не подключены:
+  адаптер честно сообщает `bandit_weights_missing`, и конвейер автоматически идёт по fallback D2 (Demucs v4).
+* Диаризация требует `HF_TOKEN` и принятых условий на `pyannote/speaker-diarization-community-1`;
+  при отсутствии токена этап деградирует до «все Speaker 1» вместо падения.
 * Frontend — заглушка (статика + прокси), React-приложение появится на этапе 8.
+* Диск сервера близок к заполнению (~5 ГБ): тяжёлые тесты гонять на коротких клипах;
+  объём занимает образ ML-воркера (19 ГБ) и чужие каталоги (`~/comfyui`, 32 ГБ — не трогать).
