@@ -37,4 +37,10 @@ COPY migrations ./migrations
 COPY app ./app
 COPY scripts ./scripts
 
+# Entrypoint выставляет LD_LIBRARY_PATH так, чтобы библиотеки из pip-пакетов nvidia-*
+# (cuDNN/cuBLAS, с которыми собран torch) были в приоритете над системными из базового образа.
+COPY docker/entrypoint-ml.sh /usr/local/bin/entrypoint-ml.sh
+RUN chmod +x /usr/local/bin/entrypoint-ml.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint-ml.sh"]
+
 CMD ["dramatiq", "--queues", "gpu", "--processes", "1", "--threads", "1", "app.workers.broker", "app.workers.tasks"]
