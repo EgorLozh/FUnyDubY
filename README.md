@@ -82,9 +82,9 @@ http   { server { listen 127.0.0.1:3080 proxy_protocol; … } }   # прежни
        { server { listen 127.0.0.1:3443 ssl proxy_protocol; … } } # https с сертификатом
 ```
 
-Сертификат — Let's Encrypt через DuckDNS (DNS-01: входящие порты не нужны), домен `funydub.duckdns.org`,
+Сертификат — Let's Encrypt через DuckDNS (DNS-01: входящие порты не нужны), домен `egrigorich.duckdns.org` (в сертификате и второе имя, `funydub.duckdns.org`, — чтобы выданные ранее ссылки работали),
 автопродление — задание acme.sh в cron. Итоговый адрес интерфейса:
-`https://funydub.duckdns.org:3001/dub/` — без предупреждений браузера и без установки чего-либо
+`https://egrigorich.duckdns.org:3001/dub/` — без предупреждений браузера и без установки чего-либо
 у участников. Скрипты: `scripts/setup_https_mux.sh` (мультиплексор, с бэкапами и автооткатом),
 `scripts/setup_le_cert.sh` (выпуск и установка сертификата).
 
