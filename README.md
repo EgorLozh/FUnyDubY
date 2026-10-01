@@ -17,16 +17,24 @@
 | 3. Backend core: комнаты, участники, права | готово |
 | 4. Загрузка видео (ffprobe, лимиты, Range) | готово |
 | 5. Очередь, этапы конвейера, SSE, реконсилятор | готово |
-| 6. ML-конвейер: отделение речи, STT, диаризация, нарезка реплик | работает end-to-end на тестовом ролике (см. ниже) |
+| 6. ML-конвейер: отделение речи, STT, диаризация, нарезка реплик | работает end-to-end, включая **Bandit v2** (D1) с весами Zenodo |
 | 7. Редактирование диалога (API) | частично: чтение реплик/спикеров, аудио оригинала |
 | 8-14. Назначения, запись, рендер, e2e | не начато |
 
-Результат прогона ML-конвейера на тестовом клипе (33 с, речь поверх музыки):
-`extract_audio` 0.5 с → `separate_speech` 4.3 с (Demucs, `alpha=1.009`, остаток речи в фоне −15.3 дБ до дуккинга)
-→ `transcribe` 10.6 с (large-v3, 88 слов с word-timestamps) → `diarize` 6.8 с (pyannote community-1)
-→ `merge_dialogue` 0.6 с (5 реплик с текстом и таймкодами + нарезки речи под каждую).
+Результат прогона ML-конвейера на тестовом клипе (33 с, речь поверх музыки), бэкенд Bandit v2:
+`extract_audio` 0.5 с → `separate_speech` 13.5 с (Bandit, `α=1.003`) → `transcribe` 10.4 с
+(large-v3, word-timestamps) → `diarize` 5.9 с (pyannote community-1) → `merge_dialogue` 0.6 с
+(5 реплик с текстом и таймкодами + нарезки речи под каждую).
 
-Проверка одной командой на сервере: `bash scripts/make_test_clip.sh && bash scripts/e2e_ml.sh`.
+Проверка качества разделения с эталонной дорожкой речи (Bandit vs Demucs на одном аудио):
+
+```bash
+bash scripts/make_test_clip.sh /tmp/testclip                       # фикстура + эталоны
+docker compose run --rm -v /tmp/testclip:/tmp/testclip:ro \
+  -v "$PWD/backend/scripts:/srv/app/scripts:ro" worker-gpu \
+  python scripts/check_separation.py /tmp/testclip/mix.wav \
+  --truth /tmp/testclip/speech_truth.wav --compare
+```
 
 Проверка состояния одной командой: `bash scripts/smoke_api.sh` (сейчас 46 проверок: комнаты, участники,
 права, загрузка и отказы медиа, очередь и этапы, SSE, purge).
