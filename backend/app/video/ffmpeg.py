@@ -162,7 +162,7 @@ def mux_video_audio(
     out.parent.mkdir(parents=True, exist_ok=True)
     run(
         [
-            "ffmpeg", "-nostdin", "-hide_banner", "-y",
+            "-nostdin", "-hide_banner", "-y",
             "-i", str(source),
             "-i", str(audio_wav),
             "-map", "0:v:0",
