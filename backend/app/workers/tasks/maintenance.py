@@ -26,8 +26,10 @@ log = get_logger("maintenance")
 
 async def _reconcile() -> dict[str, int]:
     from app.core.db import worker_session
+    from app.models import Room, RoomStatus
+    from app.workers.tasks.purge_room import purge_room
 
-    stats = {"stalled": 0, "requeued": 0, "finalized": 0}
+    stats = {"stalled": 0, "requeued": 0, "finalized": 0, "purged": 0}
     now = datetime.now(UTC)
     stall = timedelta(minutes=settings.job_stage_stall_minutes)
 
@@ -37,6 +39,27 @@ async def _reconcile() -> dict[str, int]:
                 [JobStatus.RUNNING, JobStatus.QUEUED]
             )))).scalars().all()
         )
+
+        # Комнаты, застрявшие в удалении: purge мог не доехать (Redis был недоступен) или упасть
+        # на файлах. Обычный срок жизни такие комнаты не подхватывает — они уже помечены
+        # удалёнными, — поэтому без этого прохода видео и записи остались бы на диске навсегда.
+        stuck = (
+            await session.execute(
+                select(Room).where(
+                    Room.status == RoomStatus.DELETING,
+                    Room.updated_at < now - timedelta(minutes=5),
+                )
+            )
+        ).scalars().all()
+        for room in stuck:
+            room.status = RoomStatus.DELETING  # отметка времени: следующий заход не раньше 5 минут
+            try:
+                purge_room.send(room.id)
+                stats["purged"] += 1
+            except Exception as exc:  # noqa: BLE001
+                log.error("purge_resend_failed", room_id=room.id, error=str(exc))
+        if stuck:
+            await session.commit()
 
         for job in jobs:
             stages = (

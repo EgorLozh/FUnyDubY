@@ -17,12 +17,25 @@ log = get_logger("purge_room")
 
 async def _purge(room_id: str) -> dict[str, object]:
     # 1. Файлы
+    size_before = 0
+    files_ok = True
     try:
         size_before = storage.room_size_bytes(room_id)
         storage.delete_room(room_id)
+        # `delete_room` глотает ошибки rmtree — проверяем факт, а не отсутствие исключения
+        if storage.room_storage_dir(room_id).exists():
+            raise RuntimeError("каталог комнаты остался на диске")
     except Exception as exc:  # noqa: BLE001
         log.error("purge_files_failed", room_id=room_id, error=str(exc))
         size_before = -1
+        files_ok = False
+
+    # Файлы не убрались — строку комнаты НЕ удаляем: иначе видео и записи останутся на диске
+    # без единой ссылки в БД, и найти их будет уже нечем. Комната остаётся в DELETING,
+    # обслуживание повторит попытку.
+    if not files_ok:
+        log.warning("purge_deferred", room_id=room_id)
+        return {"room_id": room_id, "deleted": False, "deferred": True}
 
     # 2. Строка комнаты (каскад уносит детей)
     async with WorkerSessionFactory() as session:
