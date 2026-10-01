@@ -44,6 +44,7 @@ class SeparationResult:
     mode: str
     backend: str
     quality: dict
+    stems: dict[str, Audio] | None = None  # только для путей, где стемы есть как таковые
 
 
 def _device() -> str:
@@ -345,6 +346,7 @@ def from_stems(mix: Audio, stems: dict[str, Audio], *, ducking_db: float) -> Sep
         mode="stems_sum",
         backend="bandit_v2",
         quality=quality,
+        stems=stems,
     )
 
 

@@ -62,6 +62,12 @@ def _report(
             f"  ИСТИННАЯ утечка речи в фон (эталон): проекция {projection:+.2f} дБ, "
             f"по энергии {ratio:+.2f} дБ"
         )
+        for name, audio in sorted(getattr(result, "stems", {}).items()):
+            stem_projection, stem_ratio = _truth_rejection(mix, audio, truth)
+            print(
+                f"    стем {name:<8}: проекция на эталон {stem_projection:+.2f} дБ, "
+                f"по энергии {stem_ratio:+.2f} дБ"
+            )
 
 
 def _truth_rejection(mix: Audio, background: Audio, truth: Audio) -> tuple[float, float]:
