@@ -116,6 +116,8 @@ export function RoomPage() {
             Войти
           </button>
         </form>
+        {/* Тост нужен и здесь: иначе отказ («имя занято») выглядит как «кнопка не работает» */}
+        {toast && <div className={`toast${toast.ok ? ' ok' : ''}`}>{toast.text}</div>}
       </div>
     )
   }
