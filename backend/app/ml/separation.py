@@ -144,29 +144,55 @@ def speech_activity_mask(mix: Audio, speech: Audio, hop_ms: int = 50, threshold_
 
 
 def expand_mask_to_samples(mask: np.ndarray, hop: int, total: int) -> np.ndarray:
-    return np.repeat(mask, hop)[:total]
+    """Развернуть оконную маску в пошаговую. Длину добираем до total, иначе массивы разъедутся."""
+    expanded = np.repeat(mask, hop)
+    if len(expanded) >= total:
+        return expanded[:total]
+    return np.concatenate([expanded, np.zeros(total - len(expanded), dtype=expanded.dtype)])
 
 
 def duck_background(background: Audio, speech_mask: np.ndarray, ducking_db: float) -> Audio:
-    """Приглушить фон в зонах речи с плавными фронтами (атака 20 мс, релиз 120 мс)."""
+    """Приглушить фон в зонах речи с плавными фронтами (атака 20 мс, релиз 120 мс).
+
+    Огибающая считается на сетке 1 мс и растягивается интерполяцией: поэлементный цикл
+    по 20 млн сэмплов (10-минутный ролик) занял бы десятки секунд, а точность 1 мс
+    для дуккинга избыточна.
+    """
     if ducking_db >= 0:
         return background
-    samples = background.samples.astype(np.float32).copy()
-    gain = np.where(speech_mask, 10 ** (ducking_db / 20), 1.0).astype(np.float32)
 
+    samples = background.samples.astype(np.float32)
     rate = background.sample_rate
-    attack = max(1, int(rate * 0.02))
-    release = max(1, int(rate * 0.12))
-    smoothed = gain.copy()
-    for index in range(1, len(gain)):
-        target = gain[index]
-        coefficient = attack if target < smoothed[index - 1] else release
-        step = 1.0 / coefficient
-        smoothed[index] = smoothed[index - 1] + (target - smoothed[index - 1]) * step
 
+    if len(speech_mask) != len(samples):
+        speech_mask = np.resize(speech_mask, len(samples))
+
+    step = max(1, int(rate / 1000))  # 1 мс
+    frames = len(samples) // step
+    if frames == 0:
+        return background
+
+    coarse_target = np.where(
+        speech_mask[: frames * step].reshape(frames, step).any(axis=1),
+        10 ** (ducking_db / 20),
+        1.0,
+    ).astype(np.float64)
+
+    attack = max(1, int(0.020 * 1000))  # в шагах сетки
+    release = max(1, int(0.120 * 1000))
+    envelope = np.empty(frames, dtype=np.float64)
+    envelope[0] = coarse_target[0]
+    for index in range(1, frames):
+        target = coarse_target[index]
+        coefficient = attack if target < envelope[index - 1] else release
+        envelope[index] = envelope[index - 1] + (target - envelope[index - 1]) / coefficient
+
+    positions = np.arange(len(samples), dtype=np.float64)
+    full = np.interp(positions, np.arange(frames, dtype=np.float64) * step, envelope)
+    gain = full.astype(np.float32)
     if samples.ndim == 2:
-        smoothed = smoothed[:, None]
-    return Audio((samples * smoothed).astype(np.float32), rate)
+        gain = gain[:, None]
+    return Audio((samples * gain).astype(np.float32), rate)
 
 
 def subtract(
@@ -232,9 +258,17 @@ def _residual_leak_db(mix: Audio, background: Audio, mask: np.ndarray) -> float:
 
     Сравниваем энергию фона в речевых окнах с энергией самого микса там же:
     чем сильнее подавлено, тем ближе это значение к ‑∞ (на практике — к ‑20…-40 дБ).
+    Все три массива обрезаются по общей длине: маска строится целыми окнами,
+    поэтому последний «хвост» короче на величину остатка от деления.
     """
-    mix_samples = mix.mono().samples[: len(mask)]
-    bg_samples = background.mono().samples[: len(mask)]
+    mix_samples = mix.mono().samples
+    bg_samples = background.mono().samples
+    n = min(len(mix_samples), len(bg_samples), len(mask))
+    if n == 0:
+        return -120.0
+    mix_samples = mix_samples[:n]
+    bg_samples = bg_samples[:n]
+    mask = mask[:n]
     if not mask.any():
         return -120.0
     mix_energy = float(np.sum(np.square(mix_samples[mask].astype(np.float64))))
