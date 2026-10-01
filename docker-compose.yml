@@ -24,6 +24,7 @@ services:
       - ./data:/data
       - ./backend/app:/srv/app/app:ro          # dev: код без пересборки
       - ./backend/migrations:/srv/app/migrations:ro
+      - ./backend/tests:/srv/app/tests:ro      # dev: править тесты без пересборки образа
     depends_on:
       redis:
         condition: service_healthy
