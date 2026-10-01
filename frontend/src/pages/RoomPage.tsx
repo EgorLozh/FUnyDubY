@@ -12,6 +12,7 @@ import { ApiError } from '../types'
 import { api, session } from '../api/client'
 import { useRoomData } from '../hooks/useRoomData'
 import { DialogueTable } from '../components/DialogueTable'
+import { ResultPanel } from '../components/ResultPanel'
 import { MyLinesPanel } from '../components/MyLinesPanel'
 import { ParticipantsPanel } from '../components/ParticipantsPanel'
 import { ProcessingBanner, StageList } from '../components/ProcessingBanner'
@@ -36,7 +37,7 @@ export function RoomPage() {
   const [joinName, setJoinName] = useState(session.name(roomId) ?? '')
   const player = useRef<PlayerHandle>(null)
 
-  const { room, lines, speakers, participants, job, loading, error, reload } = useRoomData(roomId)
+  const { room, lines, speakers, participants, job, loading, error, reload, events } = useRoomData(roomId)
 
   const notify = useCallback((text: string, ok = false) => {
     setToast({ text, ok })
@@ -120,7 +121,6 @@ export function RoomPage() {
   }
 
   const hasVideo = Boolean(room?.video)
-  const processing = !job || job.status === 'RUNNING' || job.status === 'QUEUED'
 
   return (
     <div className="app">
@@ -240,20 +240,8 @@ export function RoomPage() {
                 />
               )}
 
-              {tab === 'result' && (
-                <div className="panel-body">
-                  <p className="muted">
-                    Здесь появится готовое видео: картинка исходника, музыка и эффекты без
-                    оригинального голоса, поверх — ваши записи.
-                  </p>
-                  <p className="small">
-                    Озвучено {room?.counters.recorded_lines ?? 0} из {room?.counters.lines ?? 0} реплик.
-                    {processing
-                      ? ' Дождитесь окончания обработки.'
-                      : ' Сборка финального микса — следующий этап разработки.'}
-                  </p>
-                  <button disabled>Скачать финальное видео</button>
-                </div>
+              {tab === 'result' && room && (
+                <ResultPanel room={room} events={events} notify={notify} onChanged={() => void reload()} />
               )}
             </div>
 

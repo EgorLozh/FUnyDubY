@@ -153,6 +153,37 @@ export type Recording = {
   created_at: string
 }
 
+export type RenderStatus = 'QUEUED' | 'MIXING' | 'ENCODING' | 'DONE' | 'FAILED' | 'CANCELED'
+
+export type RenderMetrics = {
+  used_takes?: number
+  used_originals?: number
+  silent_lines?: number
+  applied_gain_db?: number
+  peak_db?: number
+  loudness_lufs?: number | null
+}
+
+export type Render = {
+  id: string
+  room_id: string
+  status: RenderStatus
+  progress: number
+  total_lines: number
+  recorded_lines: number
+  used_lines: number
+  size_bytes: number | null
+  duration_ms: number | null
+  is_current: boolean
+  options: { unrecorded?: 'silent' | 'original' }
+  metrics: RenderMetrics | null
+  error: { code?: string; message?: string } | null
+  created_at: string
+  finished_at: string | null
+  file_url: string | null
+  download_url: string | null
+}
+
 export type RoomEvent = {
   id?: number
   type: string

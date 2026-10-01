@@ -14,6 +14,7 @@ import {
   type Line,
   type Participant,
   type ParticipantRegistered,
+  type Render,
   type Recording,
   type Room,
   type RoomCreated,
@@ -24,7 +25,7 @@ import {
 
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api'
 
-export type MediaKind = 'speech' | 'background' | 'original' | 'recording'
+export type MediaKind = 'speech' | 'background' | 'original' | 'recording' | 'render'
 
 // ------------------------------------------------------------------ токен участника
 
@@ -342,11 +343,34 @@ export const api = {
   ): Promise<BulkAssignment> {
     return request<BulkAssignment>(`/rooms/${roomId}/assignments/bulk`, { body: payload, roomId })
   },
+
+  listRenders(roomId: string): Promise<Render[]> {
+    return request<Render[]>(`/rooms/${roomId}/renders`, { roomId })
+  },
+
+  startRender(
+    roomId: string,
+    options: { unrecorded: 'silent' | 'original' },
+  ): Promise<Render> {
+    return request<Render>(`/rooms/${roomId}/renders`, { body: { options }, roomId })
+  },
+
+  cancelRender(roomId: string, renderId: string): Promise<Render> {
+    return request<Render>(`/rooms/${roomId}/renders/${renderId}/cancel`, { method: 'POST', roomId })
+  },
 }
 
 // ------------------------------------------------------------------ ссылки на медиа
 
 export const media = {
+  renderUrl(roomId: string, renderId: string): string {
+    return `${API_BASE}/rooms/${roomId}/media/render/${renderId}`
+  },
+
+  renderDownloadUrl(roomId: string, renderId: string): string {
+    return `${API_BASE}/rooms/${roomId}/renders/${renderId}/file`
+  },
+
   url(roomId: string, kind: MediaKind, ref: string): string {
     return `${API_BASE}/rooms/${roomId}/media/${kind}/${encodeURIComponent(ref)}`
   },
