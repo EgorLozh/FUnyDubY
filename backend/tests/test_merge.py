@@ -64,9 +64,22 @@ class TestBuildLines:
     def test_sentence_boundary_splits_earlier(self):
         words = [w("Done.", 0, 400), w("Next", 700, 1000)]
         lines = build_lines(
-            words, [turn("spk_0", 0, 1000)], merge_gap_ms=1000, sentence_gap_ms=150
+            words,
+            [turn("spk_0", 0, 1000)],
+            merge_gap_ms=1000,
+            sentence_gap_ms=150,
+            min_line_ms=100,
         )
         assert len(lines) == 2
+
+    def test_short_sentence_fragment_merges_back(self):
+        """Короткая реплика после точки всё равно склеивается: иначе получаются обрубки."""
+        words = [w("Done.", 0, 400), w("Next", 700, 1000)]
+        lines = build_lines(
+            words, [turn("spk_0", 0, 1000)], merge_gap_ms=1000, sentence_gap_ms=150
+        )
+        assert len(lines) == 1
+        assert lines[0].text == "Done. Next"
 
     def test_long_line_is_split(self):
         words = [w(f"w{i}", i * 500, i * 500 + 400) for i in range(30)]  # 15 секунд

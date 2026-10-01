@@ -47,13 +47,14 @@ def validate_text(text: str) -> list[str]:
                 f"файл склеен (нет перевода строки после значения)"
             )
         if key == "HF_TOKEN" and value:
-            if not value.startswith("hf_"):
-                problems.append(f"строка {number}: HF_TOKEN не начинается с hf_")
-            elif len(value) > 60:
+            # Сначала длина: склеенное значение тоже «не начинается с hf_», но причина важнее
+            if len(value) > 60:
                 problems.append(
                     f"строка {number}: HF_TOKEN длиной {len(value)} символов — похоже, к нему "
                     f"приклеено лишнее (нормальный токен ~37 символов)"
                 )
+            elif not value.startswith("hf_"):
+                problems.append(f"строка {number}: HF_TOKEN не начинается с hf_")
     if not any(line.startswith("HF_TOKEN=") for line in text.splitlines()):
         problems.append("в файле нет HF_TOKEN (диаризация пойдёт по деградации: все Speaker 1)")
     return problems

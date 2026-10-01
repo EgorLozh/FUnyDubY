@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import secrets
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from app.core.errors import Forbidden
 
 # Алфавит base32 без визуально неоднозначных символов: 0/O, 1/I/L
 ROOM_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
-ROOM_ID_RE = r"^[23456789abcdefghjkmnpqrstuvwxyz]{20}$"
+ROOM_ID_RE = re.compile(r"^[23456789abcdefghjkmnpqrstuvwxyz]{20}$")
 
 
 def generate_room_id() -> str:
