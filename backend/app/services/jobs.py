@@ -239,6 +239,23 @@ async def _update_job_progress(session: AsyncSession, job: ProcessingJob) -> int
     return job.progress
 
 
+def _is_data_error(exc: BaseException) -> bool:
+    """Ошибка данных (нарушение constraint, несовместимый тип) повтором не лечится.
+
+    На 10-минутном ролике этап склейки падал на check-constraint длительности реплики и
+    уходил в бесконечные повторы Dramatiq: этап висел RUNNING десятки минут, а в лог сыпались
+    одинаковые трассировки. Тот же вход даст тот же отказ, поэтому помечаем как постоянный.
+    """
+    from sqlalchemy.exc import DataError, IntegrityError
+
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, (IntegrityError, DataError)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 async def run_stage(
     job_id: uuid.UUID,
     stage: StageName,
@@ -368,7 +385,7 @@ async def run_stage(
             # равно бросали исключение, Dramatiq ретраил, и джоб мигал FAILED → RUNNING →
             # FAILED, пока пользователь уже видел понятную ошибку. Транзиентные (нет места,
             # сервис недоступен, неожиданное падение) по-прежнему отдаём на повтор.
-            permanent = isinstance(exc, DomainError) and exc.status_code < 500
+            permanent = (isinstance(exc, DomainError) and exc.status_code < 500) or _is_data_error(exc)
             if permanent:
                 log.info("stage_failed_permanent", job_id=str(job.id), stage=stage.value, code=code)
                 return {"failed": code, "permanent": True}

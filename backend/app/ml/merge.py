@@ -143,10 +143,72 @@ def build_lines(
     flush()
 
     lines = _merge_short(lines, min_ms)
+    lines = _enforce_duration(lines, max_ms)
     for line in lines:
         line.is_short = line.duration_ms < short_ms
     lines = _mark_overlaps(lines, turns)
     return lines
+
+
+# Границы из БД (`ck_lines_duration_range`): реплика короче 100 мс или длиннее 60 с не влезает.
+MIN_DB_MS = 100
+MAX_DB_MS = 60_000
+
+
+def _enforce_duration(lines: list["Line"], max_ms: int) -> list["Line"]:
+    """Привести длительности реплик к допустимым — независимо от того, что вернул STT.
+
+    На музыке и шуме whisper выдаёт «слова» длиной в десятки секунд: реплика, собранная из
+    такого слова, вылезает за лимит БД, и вставка падает на check-constraint — из-за этого
+    падал весь этап на реальном киноролике (10 минут диалога с музыкой). Поэтому режем
+    слишком длинные реплики по словам, а вырожденные растягиваем до минимума.
+    """
+    limit = max(MIN_DB_MS + 1, min(max_ms, MAX_DB_MS))
+    result: list[Line] = []
+    for line in lines:
+        if line.duration_ms <= limit:
+            result.append(line)
+            continue
+        words = list(line.words or [])
+        if not words:
+            # Слов нет — просто обрезаем: содержимое важнее длины, а таймлайн остаётся валидным
+            line.end_ms = line.start_ms + limit
+            result.append(line)
+            continue
+        chunk: list[dict] = []
+        for word in words:
+            if chunk and word["t1"] - chunk[0]["t0"] > limit:
+                result.append(_line_from_words(line.speaker_key, chunk))
+                chunk = []
+            chunk.append(word)
+        if chunk:
+            result.append(_line_from_words(line.speaker_key, chunk))
+
+    for line in result:
+        if line.end_ms - line.start_ms < MIN_DB_MS:
+            line.end_ms = line.start_ms + MIN_DB_MS
+        elif line.end_ms - line.start_ms > MAX_DB_MS:
+            # Одно «слово» длиннее лимита: подрезаем его, иначе вставка снова упадёт
+            line.end_ms = line.start_ms + MAX_DB_MS
+            line.words = [
+                {**word, "t1": min(word["t1"], line.end_ms)} for word in (line.words or [])
+            ]
+    return result
+
+
+def _line_from_words(speaker_key: str, words: list[dict]) -> "Line":
+    """Собрать реплику из нарезки слов (при разрезании длинной реплики)."""
+    start = words[0]["t0"]
+    end = max(word["t1"] for word in words)
+    if end - start > MAX_DB_MS:
+        end = start + MAX_DB_MS
+    return Line(
+        speaker_key=speaker_key,
+        start_ms=start,
+        end_ms=end,
+        text=_join_words([word["w"] for word in words]),
+        words=list(words),
+    )
 
 
 def _join_words(parts: list[str]) -> str:

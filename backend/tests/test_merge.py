@@ -128,3 +128,37 @@ class TestBuildLines:
         words = [w("second", 500, 800), w("first", 0, 400)]
         lines = build_lines(words, [turn("spk_0", 0, 800)])
         assert lines[0].text == "First second"
+
+
+def test_длинная_реплика_режется_по_лимиту():
+    """«Слово» длиной в минуту (частый артефакт STT на музыке) не должно ломать вставку."""
+    words = [
+        Word(text="Раз", start_ms=0, end_ms=300),
+        Word(text="два", start_ms=300, end_ms=600),
+        Word(text="м-м-м", start_ms=600, end_ms=95_000),   # аномалия: 94 секунды «мычания»
+        Word(text="три", start_ms=95_000, end_ms=95_300),
+    ]
+    lines = build_lines(words, [Turn(speaker="spk_0", start_ms=0, end_ms=95_300)], max_line_ms=12_000)
+    assert lines, "реплики должны остаться"
+    for line in lines:
+        assert 100 <= line.duration_ms <= 60_000, f"длительность {line.duration_ms} вне лимита БД"
+        assert line.text.strip()
+
+
+def test_вырожденная_реплика_растягивается_до_минимума():
+    words = [Word(text="А", start_ms=1_000, end_ms=1_020)]  # 20 мс — короче минимума БД
+    lines = build_lines(words, [Turn(speaker="spk_0", start_ms=0, end_ms=2_000)])
+    assert len(lines) == 1
+    assert lines[0].duration_ms >= 100
+
+
+def test_обычный_диалог_не_меняется():
+    words = [
+        Word(text="Привет.", start_ms=0, end_ms=500),
+        Word(text="Как", start_ms=900, end_ms=1_200),
+        Word(text="дела?", start_ms=1_250, end_ms=1_700),
+    ]
+    turns = [Turn(speaker="spk_0", start_ms=0, end_ms=800), Turn(speaker="spk_1", start_ms=900, end_ms=1_800)]
+    lines = build_lines(words, turns, max_line_ms=12_000)
+    assert [line.text for line in lines] == ["Привет.", "Как дела?"]
+    assert lines[0].start_ms == 0 and lines[0].end_ms == 500

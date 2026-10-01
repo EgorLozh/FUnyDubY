@@ -8,6 +8,10 @@
 
 import {
   ApiError,
+  type AdminOverview,
+  type AdminPurgeResult,
+  type AdminRoomDetail,
+  type PurgeScope,
   type Assignment,
   type BulkAssignment,
   type Job,
@@ -74,6 +78,7 @@ type RequestOptions = {
   body?: unknown
   roomId?: string
   token?: string | null
+  adminToken?: string | null
   signal?: AbortSignal
   formData?: FormData
 }
@@ -83,6 +88,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
   const token = options.token ?? (options.roomId ? session.token(options.roomId) : null)
   if (token) headers['X-Participant-Token'] = token
+  if (options.adminToken) headers['X-Admin-Token'] = options.adminToken
 
   const response = await fetch(`${API_BASE}${path}`, {
     method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
@@ -353,6 +359,29 @@ export const api = {
     options: { unrecorded: 'silent' | 'original' },
   ): Promise<Render> {
     return request<Render>(`/rooms/${roomId}/renders`, { body: { options }, roomId })
+  },
+
+  // ---------------------------------------------------------------- админка
+  adminOverview(adminToken: string): Promise<AdminOverview> {
+    return request<AdminOverview>('/admin/overview', { adminToken })
+  },
+
+  adminRoom(adminToken: string, roomId: string): Promise<AdminRoomDetail> {
+    return request<AdminRoomDetail>(`/admin/rooms/${roomId}`, { adminToken })
+  },
+
+  adminPurge(adminToken: string, roomId: string, scopes: PurgeScope[]): Promise<AdminPurgeResult> {
+    return request<AdminPurgeResult>(`/admin/rooms/${roomId}/purge`, {
+      adminToken,
+      body: { scopes },
+    })
+  },
+
+  adminDeleteRoom(adminToken: string, roomId: string): Promise<{ room_id: string; status: string }> {
+    return request<{ room_id: string; status: string }>(`/admin/rooms/${roomId}`, {
+      adminToken,
+      method: 'DELETE',
+    })
   },
 
   cancelRender(roomId: string, renderId: string): Promise<Render> {

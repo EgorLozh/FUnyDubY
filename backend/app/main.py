@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.api.routes import (
+    admin,
     assignments,
     events,
     health,
@@ -138,6 +139,7 @@ async def unhandled_error_handler(_: Request, exc: Exception) -> JSONResponse:
 
 
 app.include_router(health.router)
+app.include_router(admin.router)
 app.include_router(rooms.router)
 app.include_router(video.router)
 app.include_router(jobs.router)

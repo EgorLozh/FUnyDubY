@@ -185,6 +185,47 @@ export type Render = {
   download_url: string | null
 }
 
+export type PurgeScope = 'original' | 'artifacts' | 'recordings' | 'rendered'
+
+export type AdminVideo = {
+  duration_ms: number | null
+  size_bytes: number | null
+  container: string | null
+  width: number | null
+  height: number | null
+}
+
+export type AdminRoom = {
+  id: string
+  title: string
+  status: string
+  created_at: string
+  expires_at: string | null
+  deleted_at: string | null
+  size_bytes: number
+  categories: Record<string, number>
+  files: Record<string, number>
+  video: AdminVideo | null
+  has_lines: boolean | null
+  listing: Record<string, { path: string; size_bytes: number; modified_at: string }[]> | null
+}
+
+export type AdminRoomDetail = AdminRoom
+
+export type AdminOverview = {
+  rooms: AdminRoom[]
+  totals: { rooms: number; size_bytes: number; categories: Record<string, number> }
+  disk_free_bytes: number
+}
+
+export type AdminPurgeResult = {
+  room_id: string
+  scopes: Record<string, { freed_bytes: number; items?: number; room_reset?: boolean }>
+  freed_bytes: number
+  size_bytes_after: number
+  categories_after: Record<string, number>
+}
+
 export type RoomEvent = {
   id?: number
   type: string

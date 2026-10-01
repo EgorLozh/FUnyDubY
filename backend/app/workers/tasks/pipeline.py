@@ -278,6 +278,12 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
 
     # Перенумерация всех реплик комнаты по времени: правленые человеком реплики возвращаются
     # из карантина на своё место в таймлайне, новые встают рядом с ними.
+    #
+    # Делаем в два шага со сменой знака. Одним UPDATE с оконной функцией нельзя: строки
+    # обновляются по одной, и промежуточное состояние ловит уникальный индекс (row 100000+k
+    # переезжает на j, который ещё занят другой строкой) — на 10-минутном ролике это падало
+    # с UniqueViolationError. Отрицательные значения гарантированно свободны, потому что все
+    # текущие индексы неотрицательны, а второй шаг возвращает знак, когда неотрицательных нет.
     await session.execute(
         text(
             """
@@ -287,11 +293,16 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
                 WHERE room_id = :room_id
             )
             UPDATE dialogue_lines AS line
-            SET idx = ordered.new_idx
+            SET idx = -(ordered.new_idx + 1)
             FROM ordered
             WHERE line.id = ordered.id
             """
         ),
+        {"room_id": env.room_id},
+    )
+    await session.flush()
+    await session.execute(
+        text("UPDATE dialogue_lines SET idx = -idx - 1 WHERE room_id = :room_id"),
         {"room_id": env.room_id},
     )
     await session.flush()

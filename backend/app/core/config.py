@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     # Сборка 10-минутного ролика занимает сотни мегабайт, держать историю файлов незачем;
     # строки истории в БД остаются, download по ним отвечает понятной ошибкой.
     render_keep_files: int = 0
+    # Токен админки: пусто — админка выключена (маршруты отвечают admin_disabled)
+    admin_token: str = ""
     unrecorded_policy: str = "silent"
 
     # --- прочее ---
