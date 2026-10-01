@@ -312,7 +312,7 @@ async def merge_with_next(
     await session.flush()
     await _shift_indexes(session, room_id, from_idx=following.idx + 1, delta=-1)
     await _recut_segment(room_id, line)
-    await _remove_segment(room_id, following.id)
+    _remove_segment(room_id, following.id)
     await session.flush()
     await emit_event(
         session,
