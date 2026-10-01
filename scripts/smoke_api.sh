@@ -280,8 +280,7 @@ TAKE2=$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participa
 TAKE2B=$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" -H "Idempotency-Key: dup-key-1" -F "file=@$WORK/ok.webm;type=audio/webm")
 check "повтор с тем же Idempotency-Key не создаёт новый тейк" \
   "$(echo "$TAKE2" | json "d['id']")" "$(echo "$TAKE2B" | json "d['id']")"
-check "новый тейк стал актуальным" 1 \
-  "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "d[-1]['take_number']")"
+check "новый тейк получил номер 2 и стал актуальным" 2   "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "[t['take_number'] for t in d if t['is_current']][0]")"
 check "актуальный тейк в реплике один" 1 \
   "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "sum(1 for t in d if t['is_current'])")"
 
