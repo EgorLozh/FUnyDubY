@@ -145,6 +145,37 @@ def probe(path: Path, timeout: int | None = None) -> MediaInfo:
     )
 
 
+def audio_duration_ms(path: Path, timeout: int | None = None) -> int:
+    """Длительность аудио в мс, устойчивая к контейнерам без заголовка длины.
+
+    `format=duration` есть не везде: webm, записанный браузерным MediaRecorder (и вообще запись
+    в неищущийся поток), не содержит элемента Duration, и ffprobe отвечает «N/A». Опираться на
+    это нельзя — именно на этой цифре стоит лимит «запись не длиннее реплики», и с N/A проверка
+    молча пропускала любую длину. Поэтому при отсутствии метаданных измеряем декодированием:
+    гоним поток в null и берём последний `time=` из вывода ffmpeg.
+    """
+    import re
+
+    info = probe(path, timeout=timeout)
+    if info.duration_ms > 0:
+        return info.duration_ms
+
+    limit = timeout or settings.ffmpeg_timeout_s
+    process = _run(
+        ["ffmpeg", "-nostdin", "-hide_banner", "-i", str(path), "-f", "null", "-"],
+        limit,
+        "audio_duration",
+    )
+    matches = re.findall(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", process.stderr or "")
+    if not matches:
+        raise CorruptMedia(
+            "Не удалось определить длительность записи — файл повреждён или обрезан",
+            code="duration_unknown",
+        )
+    hours, minutes, seconds = matches[-1]
+    return int(round((int(hours) * 3600 + int(minutes) * 60 + float(seconds)) * 1000))
+
+
 def ensure_decodable(path: Path, seconds: int = 3) -> None:
     """Пробное декодирование первых секунд: ловит обрезанные и битые файлы."""
     result = _run(

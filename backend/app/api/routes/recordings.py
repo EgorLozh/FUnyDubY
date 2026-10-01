@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -158,19 +159,21 @@ async def upload_take(
     if not info.has_audio:
         raw_path.unlink(missing_ok=True)
         raise UnsupportedFormat("В загруженном файле нет звука", code="no_audio_in_take")
-    if info.duration_ms > line.duration_ms + settings.record_tolerance_ms:
+
+    # Длительность меряем отдельно: у webm из MediaRecorder нет заголовка Duration, и
+    # `info.duration_ms` там 0 — доверять этому числу нельзя (лимит бы не сработал).
+    measured_ms = await asyncio.to_thread(probe.audio_duration_ms, raw_path)
+    if measured_ms > line.duration_ms + settings.record_tolerance_ms:
         raw_path.unlink(missing_ok=True)
         raise RecordingTooLong(
-            f"Запись длиннее реплики: {info.duration_ms} мс против {line.duration_ms} мс "
+            f"Запись длиннее реплики: {measured_ms} мс против {line.duration_ms} мс "
             f"(допуск {settings.record_tolerance_ms} мс)",
-            extra={"duration_ms": info.duration_ms, "line_duration_ms": line.duration_ms},
+            extra={"duration_ms": measured_ms, "line_duration_ms": line.duration_ms},
         )
 
     processed_name = f"{Path(raw_relative).stem}.wav"
     processed_relative = "/".join([*raw_relative.split("/")[:-1], processed_name])
     processed_path = storage.absolute(processed_relative)
-    import asyncio
-
     await asyncio.to_thread(
         ffmpeg.normalize_recording,
         raw_path,

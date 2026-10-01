@@ -266,6 +266,9 @@ WORK=$(mktemp -d)
 ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=440:duration=1.2" -c:a libopus -b:a 64k "$WORK/ok.webm" 2>/dev/null
 ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=440:duration=9" -c:a libopus -b:a 64k "$WORK/long.webm" 2>/dev/null
 head -c 4096 /dev/urandom > "$WORK/garbage.webm"
+# Запись в pipe (неищущийся поток) — так отдаёт браузерный MediaRecorder: без элемента Duration.
+ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=440:duration=9" -c:a libopus -f webm - > "$WORK/long_nodur.webm" 2>/dev/null
+ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=440:duration=1.2" -c:a libopus -f webm - > "$WORK/ok_nodur.webm" 2>/dev/null
 DUR_L2=$(( $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['end_ms']") - $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['start_ms']") ))
 echo "  ..  длительность реплики: ${DUR_L2} мс, размер тейка: $(stat -c%s "$WORK/ok.webm") байт"
 
@@ -289,10 +292,14 @@ check "9-секундная запись на 3-секундную реплик�
 check "отказ сообщает длины" 1 "$(echo "$LONG" | json "1 if d.get('line_duration_ms') else 0")"
 check "мусорный файл отклонён" 422 \
   "$(code -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" -F "file=@$WORK/garbage.webm;type=audio/webm")"
+check "webm без заголовка длительности: слишком длинный отклонён" recording_too_long \
+  "$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" -F "file=@$WORK/long_nodur.webm;type=audio/webm" | json "d.get('code','')")"
+check "webm без заголовка длительности: короткий принят" 201 \
+  "$(code -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" -F "file=@$WORK/ok_nodur.webm;type=audio/webm")"
 check "чужую реплику озвучивать нельзя" 409 \
   "$(code -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TB" -F "file=@$WORK/ok.webm;type=audio/webm")"
 
-check "список тейков" 2 "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "len(d)")"
+check "список тейков" 3 "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "len(d)")"
 check "актуальная запись отдаётся медиа-эндпоинтом" 200 "$(code "$BASE/rooms/$ROOM/media/recording/$L2")"
 check "Range по актуальной записи -> 206" 206 "$(code -H 'Range: bytes=0-99' "$BASE/rooms/$ROOM/media/recording/$L2")"
 check "реплика помечена озвученной" True "$(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['has_recording']")"
