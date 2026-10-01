@@ -41,6 +41,26 @@ def _device() -> str:
         return "cpu"
 
 
+def _resolve_local_model(download_root: Path, model_name: str) -> str:
+    """Путь к уже скачанной модели, если она есть локально.
+
+    Причина: faster-whisper 1.1.1 вызывает huggingface_hub API, изменившийся в 1.x
+    (`open() got an unexpected keyword argument 'metadata_errors'`). Когда модель лежит
+    в кеше образа, обращение к хабу не нужно вовсе — передаём локальный каталог снапшота.
+    """
+    if Path(model_name).exists():
+        return model_name
+    for pattern in (
+        f"models--*--faster-whisper-{model_name}/snapshots/*",
+        f"models--*{model_name}*/snapshots/*",
+    ):
+        for candidate in sorted(download_root.glob(pattern)):
+            if (candidate / "model.bin").exists():
+                log.info("stt_local_model", model=model_name, path=str(candidate))
+                return str(candidate)
+    return model_name
+
+
 def _transcribe_whisper(
     audio_path: Path,
     *,
@@ -52,8 +72,11 @@ def _transcribe_whisper(
 
     device = _device()
     compute_type = "float16" if device == "cuda" else "int8"
-    download_root = str(Path(settings.model_cache_dir) / "faster-whisper")
-    model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=download_root)
+    download_root = Path(settings.model_cache_dir) / "faster-whisper"
+    resolved = _resolve_local_model(download_root, model_name)
+    model = WhisperModel(
+        resolved, device=device, compute_type=compute_type, download_root=str(download_root)
+    )
 
     segments, info = model.transcribe(
         str(audio_path),
