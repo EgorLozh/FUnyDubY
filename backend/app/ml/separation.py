@@ -213,8 +213,8 @@ def subtract(
         background_audio = duck_background(background_audio, sample_mask, ducking_db)
 
     quality = {
-        "speech_leak_db": round(leak_db, 2),
-        "bg_level_in_speech_db": round(duck_db, 2),
+        "speech_window_gain_db": round(duck_db, 2),
+        "bg_speech_projection_db": round(leak_db, 2),
         "alpha": round(alpha, 3),
         "mix_rms_db": round(rms_db(mix_cut), 2),
         "background_rms_db": round(rms_db(background_audio), 2),
@@ -222,9 +222,13 @@ def subtract(
         "speech_rms_db": round(rms_db(speech_cut), 2),
         "ducking_db": ducking_db,
     }
-    if leak_db > -20.0:
+    # Гейт качества: если фон в зонах речи громче, чем вне их, значит в него просочился голос.
+    # Проекционная метрика для пути вычитания вырождена (фон ортогонализован к оценке речи),
+    # поэтому решение о деградации принимается по уровню, а истинная утечка меряется
+    # приёмочным тестом на эталонной дорожке (scripts/check_separation.py --truth).
+    if duck_db > 3.0:
         quality["degraded"] = True
-        log.warning("separation_degraded", speech_leak_db=round(leak_db, 2), alpha=alpha)
+        log.warning("separation_degraded", speech_window_gain_db=round(duck_db, 2), alpha=alpha)
     return SeparationResult(
         speech=speech_cut,
         background=background_audio,
@@ -317,8 +321,8 @@ def from_stems(mix: Audio, stems: dict[str, Audio], *, ducking_db: float) -> Sep
 
     leak_db, duck_db = speech_leak_db(mix_cut, speech_cut, background_cut, sample_mask)
     quality = {
-        "speech_leak_db": round(leak_db, 2),
-        "bg_level_in_speech_db": round(duck_db, 2),
+        "speech_window_gain_db": round(duck_db, 2),
+        "bg_speech_projection_db": round(leak_db, 2),
         "alpha": None,
         "mix_rms_db": round(rms_db(mix_cut), 2),
         "background_rms_db": round(rms_db(background_cut), 2),
@@ -331,9 +335,9 @@ def from_stems(mix: Audio, stems: dict[str, Audio], *, ducking_db: float) -> Sep
     }
     if ducking_db < 0:
         background_cut = duck_background(background_cut, sample_mask, ducking_db)
-    if leak_db > -20.0:
+    if duck_db > 3.0:
         quality["degraded"] = True
-        log.warning("separation_degraded", **{"backend": "bandit_v2", **quality})
+        log.warning("separation_degraded", **{"backend": "bandit_v2", "speech_window_gain_db": round(duck_db, 2)})
     return SeparationResult(
         speech=speech_cut,
         background=background_cut,
