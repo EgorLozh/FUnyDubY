@@ -212,10 +212,18 @@ export type AdminRoom = {
 
 export type AdminRoomDetail = AdminRoom
 
+export type AdminOrphan = {
+  id: string
+  size_bytes: number
+  files: number
+  modified_at: string
+}
+
 export type AdminOverview = {
   rooms: AdminRoom[]
   totals: { rooms: number; size_bytes: number; categories: Record<string, number> }
   disk_free_bytes: number
+  orphans: { count: number; size_bytes: number }
 }
 
 export type AdminPurgeResult = {

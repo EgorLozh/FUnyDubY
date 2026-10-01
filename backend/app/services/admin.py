@@ -24,6 +24,7 @@ from pathlib import Path
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.errors import Conflict, NotFound
 from app.core.logging import get_logger
 from app.models import (
@@ -317,6 +318,75 @@ async def room_detail(session: AsyncSession, room_id: str) -> dict:
         "has_lines": bool(lines),
         "listing": room_files(room.id),
     }
+
+
+def _dir_usage(path: Path) -> tuple[int, int]:
+    size = 0
+    files = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                size += item.stat().st_size
+                files += 1
+            except OSError:
+                continue
+    return size, files
+
+
+async def orphans(session: AsyncSession) -> list[dict]:
+    """Каталоги комнат на диске, которых нет в БД.
+
+    Такие каталоги появляются, когда уборка не доехала или упала: строка комнаты уже удалена, и
+    штатными средствами её файлы больше не найти — только сверкой диска с базой.
+    """
+    root = settings.rooms_root
+    known = set(await session.scalars(select(Room.id)))
+    found: list[dict] = []
+    if not root.exists():
+        return found
+    for path in sorted(root.iterdir()):
+        if not path.is_dir() or path.name in known:
+            continue
+        size, files = _dir_usage(path)
+        found.append(
+            {
+                "id": path.name,
+                "size_bytes": size,
+                "files": files,
+                "modified_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(
+                    timespec="seconds"
+                ),
+            }
+        )
+    return found
+
+
+async def remove_orphans(session: AsyncSession, ids: list[str] | None = None) -> dict:
+    """Удалить каталоги-сироты. Комнаты с живой строкой в БД не трогаем никогда."""
+    known = set(await session.scalars(select(Room.id)))
+    candidates = await orphans(session)
+    if ids:
+        candidates = [item for item in candidates if item["id"] in set(ids)]
+    freed = 0
+    removed: list[str] = []
+    for item in candidates:
+        room_id = item["id"]
+        if room_id in known:
+            continue
+        root = settings.rooms_root
+        target = (root / room_id).resolve()
+        if root.resolve() not in target.parents:
+            log.warning("admin_orphan_refused", room_id=room_id)
+            continue
+        size = item["size_bytes"]
+        shutil.rmtree(target, ignore_errors=True)
+        if target.exists():
+            log.warning("admin_orphan_failed", room_id=room_id)
+            continue
+        freed += size
+        removed.append(room_id)
+    log.info("admin_orphans_removed", count=len(removed), freed_bytes=freed)
+    return {"removed": removed, "freed_bytes": freed}
 
 
 def disk_free_bytes() -> int:

@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { api } from '../api/client'
-import type { AdminOverview, AdminRoom, AdminRoomDetail, PurgeScope } from '../types'
+import type { AdminOrphan, AdminOverview, AdminRoom, AdminRoomDetail, PurgeScope } from '../types'
 
 const TOKEN_KEY = 'funyduby:admin-token'
 
@@ -66,6 +66,7 @@ export function AdminPage() {
   const [tokenInput, setTokenInput] = useState('')
   const [data, setData] = useState<AdminOverview | null>(null)
   const [openRoom, setOpenRoom] = useState<AdminRoomDetail | null>(null)
+  const [orphans, setOrphans] = useState<AdminOrphan[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
 
@@ -108,6 +109,34 @@ export function AdminPage() {
       notify(`Освобождено ${humanSize(result.freed_bytes)}`, true)
       await load(token)
       if (openRoom?.id === roomId) setOpenRoom(await api.adminRoom(token, roomId))
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не удалось убрать файлы', false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const loadOrphans = async (adminToken: string) => {
+    try {
+      const result = await api.adminOrphans(adminToken)
+      setOrphans(result.orphans)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не удалось получить список файлов', false)
+    }
+  }
+
+  const purgeOrphans = async (ids?: string[]) => {
+    if (!token) return
+    const what = ids ? `${ids.length} каталогов` : 'все каталоги без комнат'
+    if (!window.confirm(`Убрать ${what}?
+
+Это файлы, чьи комнаты уже удалены: удаляются с диска безвозвратно.`)) return
+    setBusy(true)
+    try {
+      const result = await api.adminPurgeOrphans(token, ids)
+      notify(`Убрано ${result.removed.length} каталогов, освобождено ${humanSize(result.freed_bytes)}`, true)
+      await load(token)
+      await loadOrphans(token)
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Не удалось убрать файлы', false)
     } finally {
@@ -191,6 +220,45 @@ export function AdminPage() {
       </div>
 
       <div className="panel-body">
+        {data && data.orphans.count > 0 && (
+          <div className="card" style={{ marginBottom: 8, borderColor: 'var(--accent)' }}>
+            <div className="row">
+              <b>Файлы без комнат</b>
+              <span className="muted small">
+                {data.orphans.count} каталогов на {humanSize(data.orphans.size_bytes)} — следы
+                неудачной уборки
+              </span>
+            </div>
+            <p className="small muted">
+              Строки этих комнат уже удалены, поэтому штатными средствами файлы не найти: только
+              сверкой диска с базой. Здесь их можно убрать.
+            </p>
+            <div className="actions">
+              <button className="ghost" onClick={() => void loadOrphans(token)} disabled={busy}>
+                {orphans ? 'Свернуть состав' : 'Показать состав'}
+              </button>
+              <button className="ghost" onClick={() => void purgeOrphans()} disabled={busy}>
+                Убрать всё
+              </button>
+            </div>
+            {orphans && (
+              <ul className="plain small">
+                {orphans.map((item) => (
+                  <li key={item.id}>
+                    <span className="muted">{item.id}</span> · файлов {item.files} ·{' '}
+                    {humanSize(item.size_bytes)} ·{' '}
+                    {new Date(item.modified_at).toLocaleString('ru-RU')} ·{' '}
+                    <button className="ghost" onClick={() => void purgeOrphans([item.id])} disabled={busy}>
+                      Убрать
+                    </button>
+                  </li>
+                ))}
+                {orphans.length === 0 && <li className="muted">список пуст</li>}
+              </ul>
+            )}
+          </div>
+        )}
+
         <div className="row small">
           <b>Комнаты</b>
           <button className="ghost" onClick={() => void load(token)} disabled={busy}>

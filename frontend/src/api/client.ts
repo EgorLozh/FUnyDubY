@@ -8,6 +8,7 @@
 
 import {
   ApiError,
+  type AdminOrphan,
   type AdminOverview,
   type AdminPurgeResult,
   type AdminRoomDetail,
@@ -364,6 +365,17 @@ export const api = {
   // ---------------------------------------------------------------- админка
   adminOverview(adminToken: string): Promise<AdminOverview> {
     return request<AdminOverview>('/admin/overview', { adminToken })
+  },
+
+  adminOrphans(adminToken: string): Promise<{ orphans: AdminOrphan[]; size_bytes: number }> {
+    return request('/admin/orphans', { adminToken })
+  },
+
+  adminPurgeOrphans(
+    adminToken: string,
+    ids?: string[],
+  ): Promise<{ removed: string[]; freed_bytes: number; size_bytes_after: number }> {
+    return request('/admin/orphans/purge', { adminToken, body: { ids: ids ?? null } })
   },
 
   adminRoom(adminToken: string, roomId: string): Promise<AdminRoomDetail> {

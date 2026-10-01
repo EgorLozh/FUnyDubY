@@ -17,6 +17,9 @@ from app.core.config import settings
 from app.core.errors import NotFound, ServiceUnavailable, Unauthorized
 from app.models import Room
 from app.schemas.admin import (
+    AdminOrphans,
+    AdminOrphanPurgeRequest,
+    AdminOrphanPurgeResult,
     AdminOverview,
     AdminPurgeRequest,
     AdminPurgeResult,
@@ -52,10 +55,37 @@ async def overview(
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> AdminOverview:
     data = await admin_service.overview(session, limit=limit)
+    extra = await admin_service.orphans(session)
     return AdminOverview(
         rooms=[AdminRoom(**entry) for entry in data["rooms"]],
         totals=data["totals"],
         disk_free_bytes=admin_service.disk_free_bytes(),
+        orphans={
+            "count": len(extra),
+            "size_bytes": sum(item["size_bytes"] for item in extra),
+        },
+    )
+
+
+@router.get("/orphans", response_model=AdminOrphans, summary="Файлы без комнаты")
+async def orphans(session: SessionDep, _admin: AdminDep) -> AdminOrphans:
+    rows = await admin_service.orphans(session)
+    return AdminOrphans(
+        orphans=rows,
+        size_bytes=sum(item["size_bytes"] for item in rows),
+        disk_free_bytes=admin_service.disk_free_bytes(),
+    )
+
+
+@router.post("/orphans/purge", response_model=AdminOrphanPurgeResult, summary="Убрать файлы без комнаты")
+async def purge_orphans(
+    session: SessionDep, payload: AdminOrphanPurgeRequest, _admin: AdminDep
+) -> AdminOrphanPurgeResult:
+    result = await admin_service.remove_orphans(session, payload.ids)
+    return AdminOrphanPurgeResult(
+        removed=result["removed"],
+        freed_bytes=result["freed_bytes"],
+        size_bytes_after=sum(item["size_bytes"] for item in await admin_service.orphans(session)),
     )
 
 

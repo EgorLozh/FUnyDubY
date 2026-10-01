@@ -18,6 +18,11 @@ class AdminVideo(BaseModel):
     height: int | None = None
 
 
+class AdminOrphansSummary(BaseModel):
+    count: int = 0
+    size_bytes: int = 0
+
+
 class AdminRoom(BaseModel):
     id: str
     title: str
@@ -43,6 +48,32 @@ class AdminOverview(BaseModel):
     rooms: list[AdminRoom]
     totals: AdminTotals
     disk_free_bytes: int
+    orphans: AdminOrphansSummary = AdminOrphansSummary()
+
+
+class AdminOrphan(BaseModel):
+    id: str
+    size_bytes: int
+    files: int
+    modified_at: str
+
+
+class AdminOrphans(BaseModel):
+    orphans: list[AdminOrphan]
+    size_bytes: int
+    disk_free_bytes: int
+
+
+class AdminOrphanPurgeRequest(BaseModel):
+    """ids не заданы — убираем все каталоги без комнаты."""
+
+    ids: list[str] | None = None
+
+
+class AdminOrphanPurgeResult(BaseModel):
+    removed: list[str]
+    freed_bytes: int
+    size_bytes_after: int
 
 
 class AdminPurgeRequest(BaseModel):

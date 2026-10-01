@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 
 import dramatiq
 from sqlalchemy import delete
@@ -22,7 +23,12 @@ async def _purge(room_id: str) -> dict[str, object]:
     try:
         size_before = storage.room_size_bytes(room_id)
         storage.delete_room(room_id)
-        # `delete_room` глотает ошибки rmtree — проверяем факт, а не отсутствие исключения
+        # `delete_room` глотает ошибки rmtree — проверяем факт, а не отсутствие исключения.
+        # Пустой скелет каталогов (файлов нет) потерей данных не считаем, но и мусор не оставляем.
+        leftover = storage.room_size_bytes(room_id)
+        if leftover > 0:
+            raise RuntimeError(f"на диске осталось {leftover} байт")
+        shutil.rmtree(storage.room_storage_dir(room_id), ignore_errors=True)
         if storage.room_storage_dir(room_id).exists():
             raise RuntimeError("каталог комнаты остался на диске")
     except Exception as exc:  # noqa: BLE001
