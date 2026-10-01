@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import Conflict, DomainError, NotFound
+from app.core.logging import get_logger
 from app.core.security import room_relative
 from app.models import Assignment, DialogueLine, Participant
 from app.services import storage
@@ -35,6 +36,9 @@ class InvalidLineBounds(DomainError):
     code = "invalid_line_bounds"
 
 
+log = get_logger("services.lines")
+
+
 def _speech_source(room_id: str):
     """Дорожка речи, из которой нарезаются фрагменты реплик."""
     path = storage.absolute(room_relative(room_id, "speech", "speech.wav"))
@@ -43,6 +47,15 @@ def _speech_source(room_id: str):
 
 def _segment_path(room_id: str, line_id: uuid.UUID):
     return storage.absolute(room_relative(room_id, "speech", "segments", f"{line_id}.wav"))
+
+
+def _remove_segment(room_id: str, line_id: uuid.UUID) -> None:
+    """Удалить нарезку речи реплики, которой больше нет (иначе остаётся мусор на диске)."""
+    path = _segment_path(room_id, line_id)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:  # noqa: BLE001 — не повод ломать правку
+        log.warning("segment_cleanup_failed", line_id=str(line_id), error=str(exc))
 
 
 async def _recut_segment(room_id: str, line: DialogueLine) -> None:
@@ -299,6 +312,7 @@ async def merge_with_next(
     await session.flush()
     await _shift_indexes(session, room_id, from_idx=following.idx + 1, delta=-1)
     await _recut_segment(room_id, line)
+    await _remove_segment(room_id, following.id)
     await session.flush()
     await emit_event(
         session,
