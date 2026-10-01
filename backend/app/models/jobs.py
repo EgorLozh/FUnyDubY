@@ -154,6 +154,8 @@ class RenderJob(Base, TimestampMixin):
     progress: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Метрики сборки: сколько тейков ушло в микс, истинная громкость, сработавший потолок.
+    metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -24,7 +24,7 @@ from app.models.dialogue import DialogueLine
 from app.models.jobs import RenderJob, RenderStatus
 from app.models.media import Recording
 from app.models.room import Room
-from app.models.video import Video
+from app.models import DialogueLine, Recording, RenderJob, RenderStatus, Room, Video
 
 ACTIVE_STATUSES = (RenderStatus.QUEUED, RenderStatus.MIXING, RenderStatus.ENCODING)
 
