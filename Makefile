@@ -65,8 +65,18 @@ deploy:        ## выкладка: коммит -> bare-репо на серв�
 	git push server main
 	ssh -i $(SSH_KEY) -p $(SSH_PORT) $(HOST) 'cd ~/FUnyDubY && git checkout -- . \
 		&& git pull -q ~/FUnyDubY.git main \
-		&& docker compose up -d --build && docker compose exec -T api alembic upgrade head \
+		&& docker compose up -d --build \
+		&& docker compose up -d --force-recreate api worker-cpu worker-gpu \
+		&& docker compose exec -T api alembic upgrade head \
 		&& git push -q origin main'
+
+# --force-recreate здесь обязателен: код приложения смонтирован в контейнеры (bind mount),
+# поэтому образ не меняется и `up -d` оставляет работать старые процессы с уже
+# импортированными (устаревшими) модулями Python. Так этап нарезки незаметно исполнял старый
+# код несколько часов после правки — перезапускать нужно ВСЕ сервисы с кодом.
+
+restart:       ## перезапустить сервисы с кодом (после правок без пересборки)
+	ssh -i $(SSH_KEY) -p $(SSH_PORT) $(HOST) 'cd ~/FUnyDubY && docker compose up -d --force-recreate api worker-cpu worker-gpu'
 
 smoke:         ## smoke-тест API на сервере
 	ssh -i $(SSH_KEY) -p $(SSH_PORT) $(HOST) 'cd ~/FUnyDubY && bash scripts/smoke_api.sh'
