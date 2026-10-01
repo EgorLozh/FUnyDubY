@@ -100,7 +100,11 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE: /api
+        # На сервере приложение открыто как /dub/ (порт 3001 занят другим проектом):
+        # сборка кладёт статику под этот префикс, API — /dub/api. Локальная разработка
+        # идёт через `npm run dev` и этих значений не касается.
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
     ports:
       - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8090}:80"
     depends_on:
