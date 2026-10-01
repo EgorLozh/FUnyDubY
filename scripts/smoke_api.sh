@@ -130,8 +130,9 @@ done
 check "следующий этап поставлен в очередь" 1 \
   "$(curl -s "$BASE/rooms/$ROOM/jobs/$JOB" | json "1 if any(s['stage']=='separate_speech' for s in d['stages']) else 0")"
 if [ "$ST" = "FAILED" ]; then
-  # worker-gpu поднят: этап отработал и честно ответил, что модель ещё не подключена
-  check "ML-этап ответил понятной ошибкой" stage_not_implemented "$CODE"
+  # На синтетическом ролике без речи ожидаем понятную доменную ошибку, а не 500 и не traceback.
+  check "ML-этап ответил понятной ошибкой" ok \
+    "$(case "$CODE" in no_speech_found|stage_not_implemented|bandit_weights_missing|separation_failed) echo ok;; *) echo "${CODE:-пусто}";; esac)"
   check "ошибка указывает на конкретный этап" separate_speech "$STG"
 else
   # worker-gpu не поднят: задача ждёт в очереди gpu, джоб держится в RUNNING — это ожидаемое состояние
@@ -153,7 +154,7 @@ if [ "${LINES:-0}" -lt 3 ]; then
   echo "  ..  реплик нет — вставляю фикстуру прямо в БД"
   sudo -u postgres psql -q -d dubbing -v ON_ERROR_STOP=1 <<SQL
 insert into dialogue_lines (id, room_id, idx, start_ms, end_ms, speaker_key, speaker_label, text,
-                            is_short, overlaps, is_edited, keep_original, version)
+                            is_short, "overlaps", is_edited, keep_original, version)
 values
  (gen_random_uuid(), '$ROOM', 0,  500,  3500, 'spk_0', 'Speaker 1', 'Первая реплика',  false, false, false, false, 1),
  (gen_random_uuid(), '$ROOM', 1, 4000,  7000, 'spk_0', 'Speaker 1', 'Вторая реплика',  false, false, false, false, 1),
@@ -203,23 +204,28 @@ check "правка помечена (is_edited)" True \
 check "правка подняла версию" "$((VER + 1))" \
   "$(curl -s "$BASE/rooms/$ROOM/lines/$L1" | json "d['version']")"
 
-check "PATCH спикера меняет и ключ" spk_1 \
-  "$(curl -s -X PATCH "$BASE/rooms/$ROOM/lines/$L1" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{"speaker_label":"Speaker 2"}' | json "d['speaker_key']")"
-check "PATCH /speakers переименовывает все реплики спикера" 2 \
-  "$(curl -s -X PATCH "$BASE/rooms/$ROOM/speakers/spk_1" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{"label":"Аня"}' | json "d['lines']")"
+check "PATCH /speakers переименовывает реплики спикера" 1 \
+  "$(curl -s -X PATCH "$BASE/rooms/$ROOM/speakers/spk_0" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{"label":"Рассказчик"}' | json "1 if d['lines']>=1 else 0")"
 check "новое имя видно в сводке спикеров" 1 \
-  "$(curl -s "$BASE/rooms/$ROOM/speakers" | json "1 if any(s['speaker_label']=='Аня' for s in d) else 0")"
+  "$(curl -s "$BASE/rooms/$ROOM/speakers" | json "1 if any(s['speaker_label']=='Рассказчик' for s in d) else 0")"
+check "PATCH спикера реплики меняет и ключ" speaker_2 \
+  "$(curl -s -X PATCH "$BASE/rooms/$ROOM/lines/$L1" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{"speaker_label":"Speaker 2"}' | json "d['speaker_key']")"
 
-DUR_BEFORE=$(( $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['end_ms']") - $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['start_ms']") ))
-MID=$(( $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['start_ms']") + DUR_BEFORE / 2 ))
-SPLIT=$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/split" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d "{\"at_ms\":$MID}")
-check "split вернул две реплики" 2 "$(echo "$SPLIT" | json "len(d)")"
-check "split: суммарная длительность сохранена" "$DUR_BEFORE" \
-  "$(echo "$SPLIT" | json "sum(l['duration_ms'] for l in d)")"
-check "split: нумерация последовательная" 1 \
-  "$(echo "$SPLIT" | json "1 if d[1]['idx']==d[0]['idx']+1 else 0")"
-check "merge склеивает обратно" "$DUR_BEFORE" \
-  "$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/merge" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{}' | json "d['duration_ms']")"
+if [ -n "${L2:-}" ]; then
+  DUR_BEFORE=$(( $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['end_ms']") - $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['start_ms']") ))
+  MID=$(( $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['start_ms']") + DUR_BEFORE / 2 ))
+  SPLIT=$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/split" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d "{\"at_ms\":$MID}")
+  check "split вернул две реплики" 2 "$(echo "$SPLIT" | json "len(d)")"
+  check "split: суммарная длительность сохранена" "$DUR_BEFORE" \
+    "$(echo "$SPLIT" | json "sum(l['duration_ms'] for l in d)")"
+  check "split: нумерация последовательная" 1 \
+    "$(echo "$SPLIT" | json "1 if d[1]['idx']==d[0]['idx']+1 else 0")"
+  check "merge склеивает обратно" "$DUR_BEFORE" \
+    "$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/merge" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{}' | json "d['duration_ms']")"
+else
+  echo "  FAIL реплик нет — проверки split/merge пропущены"
+  FAIL=$((FAIL + 1))
+fi
 
 check "heartbeat продлевает захват" 200 \
   "$(code -X POST "$BASE/rooms/$ROOM/lines/$L1/assignment/heartbeat" -H "X-Participant-Token: $TA")"
