@@ -204,6 +204,7 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
         merge_gap_ms=int(settings_map.get("merge_gap_ms", settings.merge_gap_ms)),
         max_line_ms=int(settings_map.get("max_line_ms", settings.max_line_ms)),
     )
+    log.info("merge_lines_built", room_id=env.room_id, lines=len(lines), words=len(words), turns=len(turns))
     await env.progress_cb(40)
 
     # Пересоздаём реплики, правки людей (is_edited) не трогаем.
@@ -229,6 +230,7 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
 
     speech_source = env.path("speech", "speech.wav")
     labels: dict[str, str] = {}
+    log.info("merge_inserting", room_id=env.room_id, count=len(lines))
     for index, line in enumerate(lines):
         labels.setdefault(line.speaker_key, f"Speaker {len(labels) + 1}")
         row = DialogueLine(
@@ -268,9 +270,11 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
                 row.end_ms + settings.segment_pad_ms,
             )
             row.speech_path = env.rel("speech", "segments", f"{row.id}.wav")
+            log.info("merge_segment_done", room_id=env.room_id, position=position)
             if position % 10 == 0:
                 await env.progress_cb(70 + int(25 * position / max(1, len(rows))))
         await session.flush()
+    log.info("merge_renumbering", room_id=env.room_id)
 
     # Перенумерация всех реплик комнаты по времени: правленые человеком реплики возвращаются
     # из карантина на своё место в таймлайне, новые встают рядом с ними.
@@ -296,6 +300,7 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
     # файлы остаются сиротами: замерено 16 файлов / 17 МБ мусора в одной комнате после
     # нескольких запусков нарезки. Файлы сохраняем только для актуальных реплик (включая
     # правленые людьми — они переживают пересоздание).
+    log.info("merge_pruning", room_id=env.room_id)
     removed = 0
     if segments_dir.exists():
         keep = {
