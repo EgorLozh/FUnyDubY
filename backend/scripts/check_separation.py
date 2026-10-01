@@ -57,6 +57,11 @@ def _report(
         f"/ фона {quality['background_rms_db']:+.2f} дБ"
     )
     if truth is not None:
+        baseline, baseline_ratio = _truth_rejection(mix, mix, truth)
+        print(
+            f"  эталон против микса (потолок метрики): проекция {baseline:+.2f} дБ, "
+            f"по энергии {baseline_ratio:+.2f} дБ"
+        )
         projection, ratio = _truth_rejection(mix, result.background, truth)
         print(
             f"  ИСТИННАЯ утечка речи в фон (эталон): проекция {projection:+.2f} дБ, "
