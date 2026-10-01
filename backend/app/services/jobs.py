@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -114,8 +114,30 @@ async def list_stages(session: AsyncSession, job_id: uuid.UUID) -> list[JobStage
     )
 
 
+async def _stalled(session: AsyncSession, job: ProcessingJob) -> bool:
+    """Джоб числится RUNNING, но этап не двигался дольше порога.
+
+    Так выглядит перезапуск воркера посреди этапа: сообщение потеряно, статус остался
+    RUNNING, а пользователь видит вечные «обработка 97%». Реконсилятор пометит такой джоб
+    FAILED, но ждать `job_stage_stall_minutes` незачем — повторный POST /jobs перезапускает
+    обработку сразу.
+    """
+    if job.status != JobStatus.RUNNING:
+        return False
+    started = (
+        await session.execute(
+            select(func.max(JobStage.started_at)).where(
+                JobStage.job_id == job.id, JobStage.status == StageStatus.RUNNING
+            )
+        )
+    ).scalar_one_or_none()
+    if started is None:
+        return False
+    return datetime.now(UTC) - started > timedelta(minutes=settings.job_stage_stall_minutes)
+
+
 async def create_or_reset_job(
-    session: AsyncSession, room: Room, video: Video, scope: str = "all"
+    session: AsyncSession, room: Room, video: Video, scope: str = "all", *, force: bool = False
 ) -> ProcessingJob:
     """Создать джоб или переиспользовать существующий (идемпотентно, unique по video_id)."""
     existing = (
@@ -123,7 +145,15 @@ async def create_or_reset_job(
     ).scalar_one_or_none()
 
     if existing and existing.status in (JobStatus.QUEUED, JobStatus.RUNNING):
-        return existing
+        if not force and not await _stalled(session, existing):
+            return existing
+        log.warning(
+            "job_restarted",
+            job_id=str(existing.id),
+            room_id=room.id,
+            scope=scope,
+            reason="force" if force else "stalled",
+        )
 
     if existing is None:
         job = ProcessingJob(

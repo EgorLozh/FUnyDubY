@@ -11,6 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class JobCreate(BaseModel):
     scope: str = Field(default="all", pattern="^(all|extract_audio|separate_speech|transcribe|diarize|merge_dialogue)$")
+    force: bool = Field(
+        default=False,
+        description="Перезапустить обработку, даже если джоб числится выполняющимся",
+    )
 
 
 class StageOut(BaseModel):

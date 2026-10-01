@@ -55,7 +55,9 @@ async def start_job(
 ) -> JobOut:
     """Запустить обработку (или перезапустить конкретный этап). Идемпотентно по видео."""
     video = await video_service.get_video_or_404(session, room)
-    job = await jobs_service.create_or_reset_job(session, room, video, scope=payload.scope)
+    job = await jobs_service.create_or_reset_job(
+        session, room, video, scope=payload.scope, force=payload.force
+    )
     if job.status.value == "QUEUED":
         await jobs_service.enqueue_first_stage(job.id)
     return await _job_out(session, job)
