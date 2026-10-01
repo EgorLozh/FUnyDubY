@@ -102,7 +102,7 @@ def corr(a, b):
     return float(np.dot(a, b) / d) if d else 0.0
 win, src, take = load('/tmp/cmp/win.wav'), load('/tmp/cmp/win_src.wav'), load('/tmp/cmp/take.wav')
 print(f'{corr(win, take):.3f} {corr(win, src):.3f}')
-" 2>/dev/null | tr -d '')
+" 2>/dev/null | tr -d '')
 WITH_TAKE=$(echo "$CORRS" | awk '{print $1}')
 WITH_SRC=$(echo "$CORRS" | awk '{print $2}')
 echo "  ..  корреляция окна: с моим тейком ${WITH_TAKE}, с оригинальной речью ${WITH_SRC}"
