@@ -65,6 +65,9 @@ services:
       - NVIDIA_VISIBLE_DEVICES=${GPU_DEVICE:-0}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      # torch >= 2.6 грузит чекпоинты с weights_only=True, а у pyannote старый pickle-формат.
+      # Чекпоинты берутся из доверенных источников (HF/pyannote), поэтому флаг уместен.
+      - TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
     volumes:
       - ./data:/data
       - ./backend/app:/srv/app/app:ro

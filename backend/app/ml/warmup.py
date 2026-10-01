@@ -18,9 +18,10 @@ log = get_logger("ml.warmup")
 
 
 def _size_of(path: Path) -> str:
+    """Размер кеша без двойного счёта: HF-кеш хранит снапшоты как симлинки на blobs."""
     if not path.exists():
         return "нет"
-    total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+    total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file() and not f.is_symlink())
     return f"{total / 1e9:.2f} ГБ"
 
 

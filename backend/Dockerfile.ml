@@ -14,6 +14,7 @@ ENV PYTHONUNBUFFERED=1 \
     STORAGE_ROOT=/data \
     HF_HOME=/root/.cache/huggingface \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
