@@ -59,7 +59,8 @@ lint:
 
 deploy:        ## выкладка: коммит -> bare-репо на сервере -> пересборка -> публикация в GitHub
 	git push server main
-	ssh -i $(SSH_KEY) -p $(SSH_PORT) $(HOST) 'cd ~/FUnyDubY && git pull -q ~/FUnyDubY.git main \
+	ssh -i $(SSH_KEY) -p $(SSH_PORT) $(HOST) 'cd ~/FUnyDubY && git checkout -- . \
+		&& git pull -q ~/FUnyDubY.git main \
 		&& docker compose up -d --build && docker compose exec -T api alembic upgrade head \
 		&& git push -q origin main'
 
