@@ -16,7 +16,12 @@ SRC="${1:-/tmp/testclip/hgf.mp4}"
 OFFSET="${2:-180}"
 LENGTH="${3:-600}"
 BASE="${4:-http://127.0.0.1:8090/api}"
-CLIP="/tmp/testclip/movie${LENGTH}.mp4"
+# Если передан уже готовый фрагмент — работаем с ним как есть (иначе режем со смещением)
+if [ -n "${1:-}" ] && [ "${1#/tmp/testclip/hgf}" != "$1" ]; then
+  CLIP="/tmp/testclip/movie${LENGTH}.mp4"
+else
+  CLIP="${1:-/tmp/testclip/movie${LENGTH}.mp4}"
+fi
 PASS=0
 FAIL=0
 
@@ -66,9 +71,10 @@ printf '  ..  всего обработка: %s с на %s с видео\n' "$TO
 
 echo "  этапы:"
 sudo -u postgres psql -d dubbing -tAc "
-  select '    ' || s.name || ': ' || coalesce(s.status,'') || ' ' || coalesce(s.duration_ms,0) || ' мс' ||
-         coalesce(' | ' || (s.metrics->>'speech_window_gain_db') || ' дБ гейт', '')
-  from job_stages s where s.job_id='$JOB' order by s.created_at" 2>/dev/null
+  select '    ' || s.stage || ': ' || coalesce(s.status,'') || ' ' || coalesce(s.duration_ms,0) || ' мс' ||
+         coalesce(' | гейт ' || (s.metrics->>'speech_window_gain_db') || ' дБ', '') ||
+         coalesce(' | утечка ' || (s.metrics->>'speech_leak_db') || ' дБ', '')
+  from job_stages s where s.job_id='$JOB' order by s.started_at" 2>/dev/null
 
 say "качество разделения и диаризация"
 sudo -u postgres psql -d dubbing -tAc "
