@@ -17,7 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import Conflict, NotFound
-from app.core.logging import log
+from app.core.logging import get_logger
+
+log = get_logger("renders")
 from app.models.dialogue import DialogueLine
 from app.models.jobs import RenderJob, RenderStatus
 from app.models.media import Recording
