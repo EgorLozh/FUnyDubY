@@ -18,6 +18,7 @@ from app.api.routes import (
     lines,
     media,
     recordings,
+    renders,
     rooms,
     video,
 )
@@ -144,4 +145,5 @@ app.include_router(lines.router)
 app.include_router(assignments.router)
 app.include_router(media.router)
 app.include_router(recordings.router)
+app.include_router(renders.router)
 app.include_router(events.router)

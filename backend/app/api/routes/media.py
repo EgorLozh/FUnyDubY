@@ -14,22 +14,25 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Path as PathParam, Request
 
 from app.core.errors import NotFound
+from app.models import RenderStatus
 from app.core.security import room_relative
 from app.api.deps import RoomDep, SessionDep
 from app.api.files import file_response
 from app.services import lines as lines_service
 from app.services import recordings as recordings_service
+from app.services import renders as renders_service
 from app.services import storage
 
 router = APIRouter(prefix="/api/rooms", tags=["media"])
 
-MediaKind = Literal["speech", "background", "original", "recording"]
+MediaKind = Literal["speech", "background", "original", "recording", "render"]
 
 CONTENT_TYPES = {
     "speech": "audio/wav",
     "background": "audio/wav",
     "original": "audio/wav",
     "recording": "audio/webm",
+    "render": "video/mp4",
 }
 
 
@@ -43,6 +46,25 @@ async def _resolve(
     if kind == "background":
         relative = room_relative(room_id, "speech", "background.wav")
         return storage.absolute(relative), "audio/wav", "background.wav"
+
+    if kind == "render":
+        if ref == "current":
+            render = await renders_service.current_render(session, room_id)
+            if render is None or not render.output_path:
+                raise NotFound("Готовой сборки пока нет", code="no_render")
+        else:
+            try:
+                render_id = uuid.UUID(ref)
+            except ValueError as exc:
+                raise NotFound("Ожидался идентификатор сборки", code="bad_ref") from exc
+            render = await renders_service.get_render(session, room_id, render_id)
+            if render.status != RenderStatus.DONE or not render.output_path:
+                raise NotFound("Сборка ещё не готова", code="render_not_ready")
+        return (
+            storage.absolute(render.output_path),
+            "video/mp4",
+            f"dub-{str(render.id)[:8]}.mp4",
+        )
 
     try:
         line_id = uuid.UUID(ref)

@@ -146,6 +146,40 @@ def normalize_recording(source: Path, out: Path, target_duration_ms: int, loudne
     )
 
 
+def mux_video_audio(
+    source: Path,
+    audio_wav: Path,
+    out: Path,
+    *,
+    audio_bitrate: str = "192k",
+    timeout: int | None = None,
+) -> None:
+    """Собрать итоговый файл: видео копируется как есть, звук кодируется в AAC.
+
+    `-c:v copy` — принципиально: пересборка озвучки не должна трогать картинку (ни качества,
+    ни времени). `+faststart` переносит заголовок вперёд, чтобы браузер начинал играть сразу.
+    """
+    out.parent.mkdir(parents=True, exist_ok=True)
+    run(
+        [
+            "ffmpeg", "-nostdin", "-hide_banner", "-y",
+            "-i", str(source),
+            "-i", str(audio_wav),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", audio_bitrate,
+            "-ar", "48000",
+            "-movflags", "+faststart",
+            "-shortest",
+            str(out),
+        ],
+        what="mux_video_audio",
+        timeout=timeout,
+    )
+
+
 def loudness_lufs(source: Path) -> float | None:
     """Измерить громкость файла (EBU R128) — для аудита нормализации."""
     result = run(

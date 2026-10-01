@@ -69,6 +69,22 @@ def absolute(relative: str | Path) -> Path:
     return safe_join(settings.storage_root, relative)
 
 
+def relative(path: str | Path) -> str:
+    """Абсолютный путь -> относительный от корня хранилища (так пути лежат в БД).
+
+    Если путь уже относительный (или лежит вне хранилища), возвращаем как есть: в БД нельзя
+    записать абсолютный путь — иначе переезд хранилища ломает все ссылки.
+    """
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        return candidate.as_posix()
+    root = Path(settings.storage_root).resolve()
+    try:
+        return candidate.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return candidate.as_posix()
+
+
 def room_storage_dir(room_id: str) -> Path:
     return absolute(Path("rooms") / room_id)
 
