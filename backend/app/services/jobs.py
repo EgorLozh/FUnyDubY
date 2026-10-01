@@ -310,6 +310,16 @@ async def run_stage(
                 {"type": "job.failed", "stage": stage.value, "code": code, "message": detail},
             )
             log.error("stage_failed", job_id=str(job.id), stage=stage.value, code=code)
+
+            # Постоянные ошибки (4xx: «в видео нет речи», «формат не поддержан», «нет артефакта»)
+            # повторной попыткой не лечатся: успешный исход тот же ввод не даст. Раньше мы всё
+            # равно бросали исключение, Dramatiq ретраил, и джоб мигал FAILED → RUNNING →
+            # FAILED, пока пользователь уже видел понятную ошибку. Транзиентные (нет места,
+            # сервис недоступен, неожиданное падение) по-прежнему отдаём на повтор.
+            permanent = isinstance(exc, DomainError) and exc.status_code < 500
+            if permanent:
+                log.info("stage_failed_permanent", job_id=str(job.id), stage=stage.value, code=code)
+                return {"failed": code, "permanent": True}
             raise
 
         stage_row.status = StageStatus.DONE
