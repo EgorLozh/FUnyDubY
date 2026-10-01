@@ -117,7 +117,7 @@ async def claim(
         raise Conflict(
             "Реплика изменилась — обновите список",
             code="version_conflict",
-            details={"version": line.version},
+            extra={"version": line.version},
         )
     await _ensure_participant(session, room_id, participant_id)
 
@@ -170,7 +170,7 @@ async def claim(
             raise Conflict(
                 "Реплика уже занята другим участником",
                 code="line_taken",
-                details={
+                extra={
                     "participant_id": str(holder.participant_id) if holder else None,
                     "display_name": holder_participant.display_name if holder_participant else None,
                 },

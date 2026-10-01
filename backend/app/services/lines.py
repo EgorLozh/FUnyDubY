@@ -158,7 +158,7 @@ async def update_line(
         raise Conflict(
             "Реплику уже изменили — обновите данные",
             code="version_conflict",
-            details={"version": line.version},
+            extra={"version": line.version},
         )
 
     new_start = line.start_ms if start_ms is None else start_ms
@@ -428,7 +428,7 @@ async def _assert_no_overlap(
         raise Conflict(
             "Границы пересекаются с соседней репликой",
             code="line_bounds_conflict",
-            details={"conflict_line_id": str(neighbour.id), "idx": neighbour.idx},
+            extra={"conflict_line_id": str(neighbour.id), "idx": neighbour.idx},
         )
 
 
