@@ -19,6 +19,7 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     environment:
+      - PYTHONPATH=/srv/app
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - ./data:/data
@@ -45,6 +46,7 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     environment:
+      - PYTHONPATH=/srv/app
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - ./data:/data
@@ -61,6 +63,7 @@ services:
       dockerfile: Dockerfile.ml
     env_file: .env
     environment:
+      - PYTHONPATH=/srv/app
       - REDIS_URL=redis://redis:6379/0
       - NVIDIA_VISIBLE_DEVICES=${GPU_DEVICE:-0}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
