@@ -161,8 +161,11 @@ async def _render(render_id: uuid.UUID) -> dict[str, object]:
         # ── 2. Мультиплекс с видео (картинка копируется без перекодирования) ──────
         await _set(session, render, RenderStatus.ENCODING, 75)
         output = out_dir / "final.mp4"
+        # Путь в БД относительный (от корня хранилища), а ffmpeg работает из своего cwd —
+        # без storage.absolute() он ищет файл относительно каталога контейнера.
+        source_video = storage.absolute(video.source_path)
         await asyncio.to_thread(
-            ffmpeg.mux_video_audio, Path(video.source_path), audio_path, output
+            ffmpeg.mux_video_audio, source_video, audio_path, output
         )
 
         info = await asyncio.to_thread(probe.probe, output)
