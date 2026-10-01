@@ -260,6 +260,55 @@ fi
 check "original без фрагмента -> 404 или 200" "ok" \
   "$(C=$(code "$BASE/rooms/$ROOM/media/original/$L1"); [ "$C" = "200" ] || [ "$C" = "404" ] && echo ok || echo "$C")"
 
+echo "== тейки озвучки (этап 9)"
+WORK=$(mktemp -d)
+# Короткий тейк (в пределах реплики) и слишком длинный — проверяем серверный автостоп-лимит.
+ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=440:duration=1.2" -c:a libopus -b:a 64k "$WORK/ok.webm" 2>/dev/null
+ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=440:duration=9" -c:a libopus -b:a 64k "$WORK/long.webm" 2>/dev/null
+head -c 4096 /dev/urandom > "$WORK/garbage.webm"
+DUR_L2=$(( $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['end_ms']") - $(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['start_ms']") ))
+echo "  ..  длительность реплики: ${DUR_L2} мс, размер тейка: $(stat -c%s "$WORK/ok.webm") байт"
+
+TAKE=$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" -F "file=@$WORK/ok.webm;type=audio/webm")
+check "загрузка тейка -> 201 с номером 1" 1 "$(echo "$TAKE" | json "d['take_number']")"
+check "тейк актуальный" True "$(echo "$TAKE" | json "d['is_current']")"
+check "длительность тейка = длительности реплики" "$DUR_L2" "$(echo "$TAKE" | json "d['duration_ms']")"
+check "тейк нормализован (есть processed-файл)" 1 \
+  "$([ -f "data/rooms/$ROOM/recordings/$L2/$(echo "$TAKE" | json "d['id']" | cut -c1-8)" ] && echo 0 || ls "data/rooms/$ROOM/recordings/$L2" | grep -c '\.wav')"
+
+TAKE2=$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" -H "Idempotency-Key: dup-key-1" -F "file=@$WORK/ok.webm;type=audio/webm")
+TAKE2B=$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" -H "Idempotency-Key: dup-key-1" -F "file=@$WORK/ok.webm;type=audio/webm")
+check "повтор с тем же Idempotency-Key не создаёт новый тейк" \
+  "$(echo "$TAKE2" | json "d['id']")" "$(echo "$TAKE2B" | json "d['id']")"
+check "новый тейк стал актуальным" 1 \
+  "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "d[-1]['take_number']")"
+check "актуальный тейк в реплике один" 1 \
+  "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "sum(1 for t in d if t['is_current'])")"
+
+LONG=$(curl -s -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" -F "file=@$WORK/long.webm;type=audio/webm")
+check "9-секундная запись на 3-секундную реплику отклонена" recording_too_long "$(echo "$LONG" | json "d.get('code','')")"
+check "отказ сообщает длины" 1 "$(echo "$LONG" | json "1 if d.get('line_duration_ms') else 0")"
+check "мусорный файл отклонён" 422 \
+  "$(code -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" -F "file=@$WORK/garbage.webm;type=audio/webm")"
+check "чужую реплику озвучивать нельзя" 409 \
+  "$(code -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TB" -F "file=@$WORK/ok.webm;type=audio/webm")"
+
+check "список тейков" 2 "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "len(d)")"
+check "актуальная запись отдаётся медиа-эндпоинтом" 200 "$(code "$BASE/rooms/$ROOM/media/recording/$L2")"
+check "Range по актуальной записи -> 206" 206 "$(code -H 'Range: bytes=0-99' "$BASE/rooms/$ROOM/media/recording/$L2")"
+check "реплика помечена озвученной" True "$(curl -s "$BASE/rooms/$ROOM/lines/$L2" | json "d['has_recording']")"
+
+FIRST_ID=$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "d[0]['id']")
+check "переключение актуального тейка -> 200" 200 \
+  "$(code -X POST "$BASE/rooms/$ROOM/lines/$L2/recordings/$FIRST_ID/current" -H "X-Participant-Token: $TA")"
+check "актуальным стал первый тейк" "$FIRST_ID" \
+  "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "[t['id'] for t in d if t['is_current']][0]")"
+check "удаление тейка -> 204" 204 \
+  "$(code -X DELETE "$BASE/rooms/$ROOM/lines/$L2/recordings/$FIRST_ID" -H "X-Participant-Token: $TA")"
+check "после удаления актуальный тейк остался" 1 \
+  "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "sum(1 for t in d if t['is_current'])")"
+rm -rf "$WORK"
+
 echo "== удаление комнаты и purge (Dramatiq)"
 LOGS() { docker compose logs --tail=300 worker-cpu 2>/dev/null; }
 PURGE_BEFORE=$(LOGS | grep -c "room_purged")
