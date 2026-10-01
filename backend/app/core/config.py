@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     separation_chunk_s: int = 25
     separation_overlap_s: int = 1
     default_ducking_db: int = -7
+    # Bandit отдаёт готовые стемы, поэтому дуккинг ему не нужен: фон и так без речи.
+    bandit_ducking_db: int = 0
+    # Путь к чекпоинту Bandit (Zenodo record 12701995, checkpoint-multi.ckpt, CC-BY-SA-4.0).
+    bandit_weights_path: str = "/data/models/bandit/checkpoint-multi.ckpt"
     stt_backend: str = "whisper"
     stt_model: str = "large-v3"
     stt_fallback_model: str = "large-v3-turbo"

@@ -40,7 +40,7 @@ class NoSpeechFound(DomainError):
 class SeparationResult:
     speech: Audio
     background: Audio
-    alpha: float
+    alpha: float | None  # None для пути «сумма стемов»: вычитания там нет
     mode: str
     backend: str
     quality: dict
@@ -93,34 +93,14 @@ def _demucs_speech_estimate(mix: Audio) -> Audio:
 # ------------------------------------------------------------- backend: bandit v2
 
 
-def _bandit_speech_estimate(mix: Audio) -> Audio:
-    """Оценка речи через Bandit v2 (speech/music/effects) — основной бэкенд D1.
+def _bandit_stems(mix: Audio) -> dict[str, Audio]:
+    """Стемы Bandit v2 (speech/music/sfx) — основной бэкенд D1."""
+    from app.ml import bandit
 
-    Требует код репозитория и веса в MODEL_CACHE_DIR/bandit_v2: research-код автора
-    не публикуется в PyPI, поэтому импорт/веса проверяются явно и с понятной ошибкой.
-    """
-    weights_dir = Path(settings.model_cache_dir) / "bandit_v2"
-    if not weights_dir.exists():
-        raise SeparationFailed(
-            f"Нет весов Bandit v2 в {weights_dir}. Скачайте их (Zenodo record 12701995) "
-            f"или переключитесь на SEPARATION_MODEL=demucs",
-            code="bandit_weights_missing",
-        )
-    try:
-        from bandit.model import Bandit  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise SeparationFailed(
-            "Код Bandit v2 не установлен в образ воркера (см. requirements-ml.txt / vendor/)",
-            code="bandit_code_missing",
-        ) from exc
-
-    raise SeparationFailed(
-        "Загрузка весов Bandit v2 ещё не подключена — используйте SEPARATION_MODEL=demucs",
-        code="bandit_not_wired",
-    )
+    return bandit.separate(mix, weights_path=settings.bandit_weights_path)
 
 
-BACKENDS = {"demucs": _demucs_speech_estimate, "bandit_v2": _bandit_speech_estimate}
+BACKENDS = {"demucs": _demucs_speech_estimate}
 
 
 # ------------------------------------------------------------------- постобработка
@@ -279,6 +259,65 @@ def _residual_leak_db(mix: Audio, background: Audio, mask: np.ndarray) -> float:
     return float(10 * np.log10(max(ratio, 1e-12)))
 
 
+def from_stems(mix: Audio, stems: dict[str, Audio], *, ducking_db: float) -> SeparationResult:
+    """Собрать результат из стемов Bandit: фон = music + sfx.
+
+    Здесь принципиально нет вычитания: модель сама отделяет речь, поэтому музыка и эффекты
+    сохраняются без потерь. Дуккинг по умолчанию выключен (`BANDIT_DUCKING_DB=0`) — он был
+    компенсацией «призрака» при вычитании, а не художественным приёмом.
+    """
+    from app.ml import bandit as bandit_mod
+
+    speech = stems.get("speech")
+    if speech is None:
+        raise SeparationFailed("Bandit не вернул стем речи", code="bandit_no_speech_stem")
+
+    background = bandit_mod.sum_stems(stems, ("music", "sfx"), mix.sample_rate)
+    if speech.sample_rate != mix.sample_rate:
+        speech = bandit_mod.resample_audio(speech, mix.sample_rate)
+        background = bandit_mod.resample_audio(background, mix.sample_rate)
+
+    speech = to_stereo(speech)
+    background = to_stereo(background)
+    n = min(len(mix.samples), len(speech.samples), len(background.samples))
+    if n == 0:
+        raise SeparationFailed("Пустой микс или пустые стемы", code="bandit_empty_audio")
+
+    mix_cut = Audio(mix.samples[:n], mix.sample_rate)
+    speech_cut = Audio(speech.samples[:n], mix.sample_rate)
+    background_cut = Audio(background.samples[:n], mix.sample_rate)
+
+    hop = max(1, int(mix_cut.sample_rate * 0.05))
+    mask_frames = speech_activity_mask(mix_cut, speech_cut, hop_ms=50)
+    sample_mask = expand_mask_to_samples(mask_frames, hop, n)
+
+    quality = {
+        "residual_speech_db": round(_residual_leak_db(mix_cut, background_cut, sample_mask), 2),
+        "alpha": None,
+        "mix_rms_db": round(rms_db(mix_cut), 2),
+        "background_rms_db": round(rms_db(background_cut), 2),
+        "background_peak_db": round(peak_db(background_cut), 2),
+        "speech_rms_db": round(rms_db(speech_cut), 2),
+        "stem_rms_db": {
+            name: round(rms_db(stem), 2) for name, stem in sorted(stems.items())
+        },
+        "ducking_db": ducking_db,
+    }
+    if ducking_db < 0:
+        background_cut = duck_background(background_cut, sample_mask, ducking_db)
+    if quality["residual_speech_db"] > -15.0:
+        quality["degraded"] = True
+        log.warning("separation_degraded", **{"backend": "bandit_v2", **quality})
+    return SeparationResult(
+        speech=speech_cut,
+        background=background_cut,
+        alpha=None,
+        mode="stems_sum",
+        backend="bandit_v2",
+        quality=quality,
+    )
+
+
 def separate_file(
     mix_path: Path,
     speech_out: Path,
@@ -288,26 +327,35 @@ def separate_file(
     ducking_db: float | None = None,
     fallback: bool = True,
 ) -> SeparationResult:
-    """Прочитать микс, отделить речь, записать две дорожки (float32 WAV)."""
+    """Прочитать микс, отделить речь, записать две дорожки (float32 WAV).
+
+    Два пути: Bandit v2 (стемы → фон = music + sfx) и Demucs (оценка речи → вычитание
+    с подбором α). Если основной бэкенд падает, работаем на fallback и помечаем это.
+    """
     mode = mode or settings.separation_mode
+    explicit_ducking = ducking_db is not None
     ducking_db = settings.default_ducking_db if ducking_db is None else ducking_db
+    bandit_ducking_db = ducking_db if explicit_ducking else settings.bandit_ducking_db
 
     mix = read(mix_path)
     backend_name = settings.separation_model
-    try:
-        speech = BACKENDS[backend_name](mix)
-    except Exception as exc:  # noqa: BLE001
-        if not fallback or backend_name == "demucs":
-            raise
-        log.warning("separation_backend_failed", backend=backend_name, error=str(exc))
-        speech = BACKENDS["demucs"](mix)
-        backend_name = "demucs"
 
-    result = subtract(mix, speech, mode=mode, ducking_db=ducking_db)
+    if backend_name == "bandit_v2":
+        try:
+            result = from_stems(mix, _bandit_stems(mix), ducking_db=bandit_ducking_db)
+        except Exception as exc:  # noqa: BLE001
+            if not fallback:
+                raise
+            log.warning("separation_backend_failed", backend=backend_name, error=str(exc))
+            result = subtract(mix, BACKENDS["demucs"](mix), mode=mode, ducking_db=ducking_db)
+            backend_name = "demucs"
+    else:
+        result = subtract(mix, BACKENDS[backend_name](mix), mode=mode, ducking_db=ducking_db)
+
     result.backend = backend_name
     write_float32(speech_out, result.speech)
     write_float32(background_out, result.background)
-    log.info("separation_done", backend=backend_name, mode=mode, **result.quality)
+    log.info("separation_done", backend=backend_name, mode=result.mode, **result.quality)
     return result
 
 
