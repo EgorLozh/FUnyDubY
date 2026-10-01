@@ -4,8 +4,20 @@ from typing import Callable
 
 import numpy as np
 import torch
-from librosa import hz_to_midi, midi_to_hz
 from torchaudio import functional as taF
+
+# Правка при вендоринге (см. NOTICE.md): upstream импортирует librosa целиком, нам нужны
+# только переводы «Гц ↔ MIDI» для музыкальной сетки полос, а librosa тянет numba/llvmlite
+# (~100 МБ) в GPU-образ. Берём librosa, если он установлен, иначе считаем теми же формулами.
+try:  # pragma: no cover - зависит от окружения
+    from librosa import hz_to_midi, midi_to_hz  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover
+
+    def hz_to_midi(frequencies):  # type: ignore[no-redef]
+        return 12 * np.log2(np.asarray(frequencies, dtype=float) / 440.0) + 69
+
+    def midi_to_hz(notes):  # type: ignore[no-redef]
+        return 440.0 * np.power(2.0, (np.asarray(notes, dtype=float) - 69.0) / 12.0)
 
 # from spafe.fbanks import bark_fbanks
 # from spafe.utils.converters import erb2hz, hz2bark, hz2erb
