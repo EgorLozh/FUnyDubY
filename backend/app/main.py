@@ -34,6 +34,16 @@ async def lifespan(_: FastAPI):
         diarization_model=settings.diarization_model,
         hf_token=bool(settings.hf_token),
     )
+    # Проверить окружение на «склеенные» значения (частая ошибка ручного .env)
+    try:
+        from app.scripts.check_env import validate_runtime
+
+        env_problems = validate_runtime()
+        for problem in env_problems:
+            log.error("env_problem", detail=problem)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("env_check_skipped", error=str(exc))
+
     # Запустить самопланирующийся реконсилятор очереди (идемпотентно через Redis-ключ)
     try:
         from app.workers.tasks.maintenance import bootstrap as maintenance_bootstrap

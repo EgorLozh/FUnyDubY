@@ -54,6 +54,10 @@ warmup:        ## скачать веса моделей в том hf-cache
 fmt:
 	$(API) ruff format app tests
 
+check-env:     ## проверить .env на склейку строк и битые секреты
+	$(API) python -m app.scripts.check_env /srv/app/.env 2>/dev/null || \
+		python -m app.scripts.check_env .env
+
 lint:
 	$(API) ruff check app tests && $(API) mypy app --ignore-missing-imports
 
