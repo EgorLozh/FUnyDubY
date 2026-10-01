@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api.routes import events, health, jobs, rooms, video
+from app.api.routes import events, health, jobs, lines, rooms, video
 from app.core.config import settings
 from app.core.db import engine
 from app.core.errors import DomainError
@@ -120,4 +120,5 @@ app.include_router(health.router)
 app.include_router(rooms.router)
 app.include_router(video.router)
 app.include_router(jobs.router)
+app.include_router(lines.router)
 app.include_router(events.router)
