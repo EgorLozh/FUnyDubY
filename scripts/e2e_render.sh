@@ -51,9 +51,14 @@ echo "  ..  реплика ${START}-${END} мс (${DUR} мс), текст: $(ech
 
 echo "== участник берёт реплику и записывает реплику голосом"
 curl -s -X POST "$BASE/rooms/$ROOM/lines/$LINE/assign" -H "X-Participant-Token: $TOKEN" > /dev/null
+DUR="$DUR"
+if ! [[ "$DUR" =~ ^[0-9]+$ ]] || [ "$DUR" -lt 100 ] || [ "$DUR" -gt 60000 ]; then
+  echo "  !! длительность реплики не получена (\"$DUR\") — прерываю, чтобы ffmpeg не писал бесконечно"
+  exit 1
+fi
 WORK=$(mktemp -d)
 # Тейк: тон 220 Гц длиной ровно в реплику (в pipe, без заголовка Duration — как отдаёт браузер)
-ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=220:duration=$(echo "$DUR" | awk '{printf "%.3f", $1/1000}')" \
+timeout 120 ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=220:duration=$(echo "$DUR" | awk '{printf "%.3f", $1/1000}')" \
   -c:a libopus -f webm - > "$WORK/take.webm" 2>/dev/null
 check "запись принята" 201 \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/rooms/$ROOM/lines/$LINE/recordings" \

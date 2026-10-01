@@ -119,8 +119,12 @@ LINEDATA=$(curl -s "$BASE/rooms/$ROOM/lines/$LINE" -H "X-Participant-Token: $TOK
 START_MS=$(echo "$LINEDATA" | json "d['start_ms']")
 DUR_MS=$(( $(echo "$LINEDATA" | json "d['end_ms']") - START_MS ))
 printf '  ..  озвучиваю реплику %s-%s мс (%s с)\n' "$START_MS" "$((START_MS + DUR_MS))" "$(awk -v ms="$DUR_MS" 'BEGIN{printf "%.1f", ms/1000}')"
+if ! [[ "$DUR_MS" =~ ^[0-9]+$ ]] || [ "$DUR_MS" -lt 100 ] || [ "$DUR_MS" -gt 60000 ]; then
+  echo "  !! длительность реплики не получена (\"$DUR_MS\") — прерываю, чтобы ffmpeg не писал бесконечно"
+  exit 1
+fi
 WORK=$(mktemp -d)
-ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=440:duration=$(awk -v ms="$DUR_MS" 'BEGIN{printf "%.3f", ms/1000}')" \
+timeout 120 ffmpeg -nostdin -v error -y -f lavfi -i "sine=frequency=440:duration=$(awk -v ms="$DUR_MS" 'BEGIN{printf "%.3f", ms/1000}')" \
   -c:a libopus -f webm - > "$WORK/take.webm" 2>/dev/null
 curl -s -X POST "$BASE/rooms/$ROOM/lines/$LINE/assign" -H "X-Participant-Token: $TOKEN" > /dev/null
 check "запись принята" 201 \
