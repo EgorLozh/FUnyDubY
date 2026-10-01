@@ -30,8 +30,10 @@ export const VideoPlayer = forwardRef<PlayerHandle, Props>(function VideoPlayer(
   const videoRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [currentMs, setCurrentMs] = useState(0)
+  const [durationMs, setDurationMs] = useState(0)
   const stopAt = useRef<number | null>(null)
-  const durationMs = lines.length ? lines[lines.length - 1].end_ms : 0
+  const linesEndMs = lines.length ? lines[lines.length - 1].end_ms : 0
+  const totalMs = durationMs > 0 ? durationMs : linesEndMs
 
   useImperativeHandle(ref, () => ({
     seekTo(ms: number) {
@@ -77,6 +79,7 @@ export const VideoPlayer = forwardRef<PlayerHandle, Props>(function VideoPlayer(
           src={media.videoUrl(roomId)}
           controls
           preload="metadata"
+          onLoadedMetadata={(event) => setDurationMs(event.currentTarget.duration * 1000)}
           onTimeUpdate={(event) => {
             const video = event.currentTarget
             const ms = video.currentTime * 1000
@@ -95,8 +98,8 @@ export const VideoPlayer = forwardRef<PlayerHandle, Props>(function VideoPlayer(
         <input
           type="range"
           min={0}
-          max={Math.max(1, durationMs)}
-          value={Math.min(currentMs, durationMs)}
+          max={Math.max(1, totalMs)}
+          value={Math.min(currentMs, totalMs)}
           onChange={(event) => {
             const ms = Number(event.target.value)
             if (videoRef.current) videoRef.current.currentTime = ms / 1000
@@ -104,7 +107,7 @@ export const VideoPlayer = forwardRef<PlayerHandle, Props>(function VideoPlayer(
           style={{ flex: 1 }}
           aria-label="Позиция в ролике"
         />
-        <span className="time">{formatMs(durationMs)}</span>
+        <span className="time">{formatMs(totalMs)}</span>
       </div>
     </div>
   )

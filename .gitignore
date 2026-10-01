@@ -7,3 +7,6 @@ data/
 node_modules/
 dist/
 backend/migrations_out/
+
+# артефакты сборки фронтенда
+frontend/tsconfig.tsbuildinfo

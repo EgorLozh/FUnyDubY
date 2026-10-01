@@ -215,21 +215,6 @@ export function RoomPage() {
                 ))}
               </div>
 
-              {tab === 'dialogue' && (
-                <DialogueTable
-                  roomId={roomId}
-                  lines={lines}
-                  speakers={speakers}
-                  participants={participants}
-                  myId={myId}
-                  activeLineId={activeLineId}
-                  onSeek={(start, end) => player.current?.playRange(start, end)}
-                  onPlayOriginal={(lineId) => player.current?.playOriginal(lineId)}
-                  onChanged={() => void reload()}
-                  notify={notify}
-                />
-              )}
-
               {tab === 'mine' && (
                 <MyLinesPanel
                   roomId={roomId}
@@ -271,6 +256,24 @@ export function RoomPage() {
                 </div>
               )}
             </div>
+
+            {/* Диалог занимает всю ширину: в узкой колонке текст реплик переносится по слову */}
+            {tab === 'dialogue' && (
+              <div style={{ gridColumn: '1 / -1' }}>
+                <DialogueTable
+                  roomId={roomId}
+                  lines={lines}
+                  speakers={speakers}
+                  participants={participants}
+                  myId={myId}
+                  activeLineId={activeLineId}
+                  onSeek={(start, end) => player.current?.playRange(start, end)}
+                  onPlayOriginal={(lineId) => player.current?.playOriginal(lineId)}
+                  onChanged={() => void reload()}
+                  notify={notify}
+                />
+              </div>
+            )}
           </div>
         </>
       )}
