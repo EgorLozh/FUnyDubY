@@ -315,6 +315,30 @@ check "после удаления актуальный тейк остался"
   "$(curl -s "$BASE/rooms/$ROOM/lines/$L2/recordings" -H "X-Participant-Token: $TA" | json "sum(1 for t in d if t['is_current'])")"
 rm -rf "$WORK"
 
+echo "== сборка финального видео (этап 12)"
+if [ -f "data/rooms/$ROOM/speech/background.wav" ]; then
+  RCODE=$(code -X POST "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{"options":{"unrecorded":"silent"}}')
+  check "заявка на сборку принята" 202 "$RCODE"
+  RID=$(curl -s "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TA" | json "d[0]['id']")
+  RID2=$(curl -s -X POST "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{"options":{"unrecorded":"silent"}}' | json "d['id']")
+  check "повторная заявка не плодит сборки" "$RID" "$RID2"
+  for _ in $(seq 1 20); do
+    sleep 3
+    ST=$(curl -s "$BASE/rooms/$ROOM/renders/$RID" -H "X-Participant-Token: $TA" | json "d['status']")
+    case "$ST" in DONE|FAILED|CANCELED) break;; esac
+  done
+  check "сборка завершилась" DONE "$ST"
+  check "готовый файл отдаётся" 200 "$(code "$BASE/rooms/$ROOM/renders/$RID/file" -H "X-Participant-Token: $TA")"
+  check "докачка готового файла -> 206" 206 "$(code -H 'Range: bytes=0-999' "$BASE/rooms/$ROOM/renders/$RID/file" -H "X-Participant-Token: $TA")"
+  check "готовое видео играется в плеере (inline)" 200 "$(code "$BASE/rooms/$ROOM/media/render/current" -H "X-Participant-Token: $TA")"
+  check "размер файла в БД совпадает с файлом" "$(curl -s "$BASE/rooms/$ROOM/renders/$RID" -H "X-Participant-Token: $TA" | json "d['size_bytes']")"     "$(stat -c%s "data/$(sudo -u postgres psql -d dubbing -tAc "select output_path from render_jobs where id='$RID'")")"
+  check "у комнаты один актуальный результат" 1 "$(curl -s "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TA" | json "len([r for r in d if r['is_current']])")"
+  check "сборка без чужого токена закрыта" 401 "$(code "$BASE/rooms/$ROOM/renders/$RID/file")"
+else
+  echo "  ..  разделение речи не дало фона — проверяю понятный отказ"
+  check "сборка без фона сообщает причину" artifacts_missing     "$(curl -s -X POST "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{}' | json "d.get('code','')")"
+fi
+
 echo "== удаление комнаты и purge (Dramatiq)"
 LOGS() { docker compose logs --tail=300 worker-cpu 2>/dev/null; }
 PURGE_BEFORE=$(LOGS | grep -c "room_purged")
