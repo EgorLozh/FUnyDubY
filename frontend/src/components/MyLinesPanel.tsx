@@ -18,6 +18,8 @@ import { Waveform } from './Waveform'
 import type { ApiError, Line, Recording } from '../types'
 
 const HEARTBEAT_MS = 5 * 60 * 1000
+/** Громкость микрофона храним локально: у каждого участника своё железо и свой уровень. */
+const GAIN_KEY = 'funyduby:mic-gain'
 
 export function MyLinesPanel({
   roomId,
@@ -95,7 +97,6 @@ function MyLine({
   notify: (message: string, ok?: boolean) => void
 }) {
   const [takes, setTakes] = useState<Recording[]>([])
-  const [busy, setBusy] = useState(false)
 
   const loadTakes = useCallback(async () => {
     try {
@@ -109,8 +110,15 @@ function MyLine({
     void loadTakes()
   }, [loadTakes, line.has_recording, line.version])
 
+  const [micGain, setMicGain] = useState(() => {
+    const saved = Number(localStorage.getItem(GAIN_KEY))
+    return Number.isFinite(saved) && saved >= 0.1 && saved <= 4 ? saved : 1
+  })
+
   const recorder = useRecorder({
     limitMs: line.duration_ms,
+    countdownMs: 3000,
+    gain: micGain,
     onRecorded: async (blob, mimeType) => {
       try {
         await api.uploadTake(
@@ -139,6 +147,11 @@ function MyLine({
 
   const current = takes.find((take) => take.is_current)
   const recording = recorder.status === 'recording'
+  const preparing = recorder.status === 'preparing'
+
+  useEffect(() => {
+    localStorage.setItem(GAIN_KEY, String(micGain))
+  }, [micGain])
 
   // Волны: оригинал — бледная подложка-ориентир, запись — поверх. Адрес тейка постоянный,
   // поэтому после новой записи кеш волны сбрасываем вручную, иначе останется старая картинка.
@@ -186,6 +199,16 @@ function MyLine({
           {current ? <span className="badge ok">записано: тейк {current.take_number}</span> : <span className="badge">не записано</span>}
           {line.overlaps && <span className="badge warn">перекрытие</span>}
         </div>
+
+        {preparing && (
+          <div style={{ marginTop: '0.5rem' }} className="row small">
+            <span style={{ color: 'var(--accent)' }}>● приготовьтесь: {recorder.countdown}</span>
+            <span className="muted">запись начнётся сама</span>
+            <button className="ghost" onClick={recorder.cancel}>
+              Отмена
+            </button>
+          </div>
+        )}
 
         {recording && (
           <div style={{ marginTop: '0.5rem' }}>
@@ -276,55 +299,6 @@ function MyLine({
           </div>
         )}
 
-        {takes.length > 1 && (
-          <div className="row small" style={{ marginTop: '0.4rem', gap: '0.35rem' }}>
-            <span className="muted">тейки:</span>
-            {takes.map((take) => (
-              <span key={take.id} className="row" style={{ gap: '0.2rem' }}>
-                <button
-                  className={take.is_current ? 'primary' : 'ghost'}
-                  disabled={busy || take.is_current}
-                  title={`Сделать актуальным тейк ${take.take_number}`}
-                  onClick={async () => {
-                    setBusy(true)
-                    try {
-                      await api.makeTakeCurrent(roomId, line.id, take.id)
-                      notify(`Актуальный тейк: ${take.take_number}`, true)
-                      await loadTakes()
-                      onChanged()
-                    } catch {
-                      notify('Не удалось переключить тейк')
-                    } finally {
-                      setBusy(false)
-                    }
-                  }}
-                >
-                  #{take.take_number}
-                </button>
-                <button
-                  className="ghost"
-                  disabled={busy}
-                  title="Удалить тейк"
-                  onClick={async () => {
-                    setBusy(true)
-                    try {
-                      await api.deleteTake(roomId, line.id, take.id)
-                      notify(`Тейк ${take.take_number} удалён`, true)
-                      await loadTakes()
-                      onChanged()
-                    } catch {
-                      notify('Не удалось удалить тейк')
-                    } finally {
-                      setBusy(false)
-                    }
-                  }}
-                >
-                  ✕
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
       </div>
 
       <div className="actions">
@@ -335,21 +309,39 @@ function MyLine({
         ) : (
           <button
             className="primary"
-            disabled={recorder.status === 'uploading' || recorder.status === 'requesting'}
+            disabled={
+              preparing || recorder.status === 'uploading' || recorder.status === 'requesting'
+            }
             onClick={() => void recorder.start()}
-            title={`Запись ограничена длительностью реплики: ${(line.duration_ms / 1000).toFixed(1)} с`}
+            title={`Запись ограничена длительностью реплики: ${(line.duration_ms / 1000).toFixed(1)} с. Перед началом будет отсчёт 3 секунды`}
           >
-            {recorder.status === 'uploading'
-              ? 'Отправка…'
-              : current
-                ? 'Перезаписать'
-                : `🎙 Записать (${(line.duration_ms / 1000).toFixed(1)} с)`}
+            {preparing
+              ? `Приготовьтесь: ${recorder.countdown}`
+              : recorder.status === 'uploading'
+                ? 'Отправка…'
+                : current
+                  ? 'Перезаписать'
+                  : `🎙 Записать (${(line.duration_ms / 1000).toFixed(1)} с)`}
           </button>
         )}
         <button disabled={!line.has_original_audio} onClick={() => onPlayOriginal(line.id)}>
           ▶ оригинал
         </button>
         <button onClick={() => onSeek(line.start_ms, line.end_ms)}>Найти в видео</button>
+        <label className="row small muted" style={{ gap: '0.35rem' }} title="Если вас плохо слышно — поднимите, если перегружает — опустите">
+          громкость
+          <input
+            type="range"
+            min={0.25}
+            max={4}
+            step={0.25}
+            value={micGain}
+            disabled={recording || preparing}
+            onChange={(event) => setMicGain(Number(event.target.value))}
+            style={{ width: 90 }}
+          />
+          <span className="time">{micGain.toFixed(2)}×</span>
+        </label>
         <button
           className="ghost"
           onClick={async () => {

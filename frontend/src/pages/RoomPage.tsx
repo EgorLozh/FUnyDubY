@@ -53,11 +53,11 @@ export function RoomPage() {
     return line?.id ?? null
   }, [lines, currentMs])
 
-  async function upload(file: File) {
+  async function upload(file: File, replace = false) {
     setUploadPercent(0)
     try {
-      await api.uploadVideo(roomId, file, setUploadPercent)
-      notify('Видео загружено, запускаю обработку', true)
+      await api.uploadVideo(roomId, file, setUploadPercent, replace)
+      notify(replace ? 'Новое видео загружено, обработка начата заново' : 'Видео загружено, запускаю обработку', true)
       await api.startJob(roomId, 'all')
       await reload()
     } catch (exc) {
@@ -65,6 +65,17 @@ export function RoomPage() {
     } finally {
       setUploadPercent(null)
     }
+  }
+
+  /** Замена монтажа: реплики, тейки и сборки старого видео исчезнут — предупреждаем заранее. */
+  function replaceVideo(file: File) {
+    const confirmed = window.confirm(
+      'Заменить видео в комнате?\n\n' +
+        'Все реплики, записи участников и готовые сборки относятся к текущему видео ' +
+        'и будут удалены — их место займёт разбор нового файла.\n\nПродолжить?',
+    )
+    if (!confirmed) return
+    void upload(file, true)
   }
 
   if (error) {
@@ -142,8 +153,32 @@ export function RoomPage() {
         >
           Ссылка
         </button>
+        {hasVideo && (
+          <label className="button ghost" style={{ cursor: 'pointer' }} title="Загрузить другой файл вместо текущего">
+            Заменить видео
+            <input
+              type="file"
+              accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov"
+              style={{ display: 'none' }}
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) replaceVideo(file)
+                event.target.value = ''
+              }}
+            />
+          </label>
+        )}
         <span className="badge">{session.name(roomId) ?? 'участник'}</span>
       </div>
+
+      {uploadPercent !== null && (
+        <div className="row small" style={{ gap: '0.5rem' }}>
+          <div className="progress" style={{ flex: 1 }}>
+            <span style={{ width: `${uploadPercent}%` }} />
+          </div>
+          <span className="muted">загрузка нового видео: {uploadPercent}%</span>
+        </div>
+      )}
 
       {!hasVideo ? (
         <div className="home" style={{ paddingTop: '2rem' }}>

@@ -107,6 +107,10 @@ async def upload_video(
         from sqlalchemy import delete
 
         await session.execute(delete(Video).where(Video.id == previous))
+        # Замена монтажа обнуляет всё, что из него следовало: реплики, тейки, назначения и сборки
+        # относились к старому видео. Оставлять их — значит показывать «озвучку» поверх
+        # картинки, которой больше нет.
+        await _reset_derived(session, room.id)
         await session.commit()
 
     await emit_event(
@@ -128,6 +132,20 @@ async def upload_video(
         container=info.container,
     )
     return video
+
+
+async def _reset_derived(session: AsyncSession, room_id: str) -> None:
+    """Убрать всё, что было выведено из прежнего видео: реплики, тейки, назначения, сборки."""
+    from sqlalchemy import delete
+
+    from app.models import DialogueLine, RenderJob
+
+    # Тейки и назначения уходят каскадом вместе с репликами (ondelete=CASCADE)
+    await session.execute(delete(DialogueLine).where(DialogueLine.room_id == room_id))
+    await session.execute(delete(RenderJob).where(RenderJob.room_id == room_id))
+    await session.flush()
+    storage.purge_derived(room_id)
+    log.info("room_derived_reset", room_id=room_id, reason="video_replaced")
 
 
 ALLOWED_EXTENSIONS = {".mp4", ".m4v", ".mov", ".webm", ".mkv"}

@@ -1,49 +1,34 @@
 /**
- * Запись с микрофона: чистые функции + хук.
+ * Запись реплики с микрофона.
  *
- * Главное требование: **запись не длиннее реплики**. Клиент останавливает запись сам ровно на
- * длительности реплики (сервер допускает небольшой хвост энкодера — `RECORD_TOLERANCE_MS`
- * и проверяет предел ещё раз). Здесь же выбор формата: браузеры расходятся, поэтому берём
- * первый поддерживаемый из webm/opus, ogg/opus, mp4.
+ * Особенности, которые важны для озвучки:
+ * - **Отсчёт перед записью** (по умолчанию 3 секунды): участник успевает вдохнуть и начать
+ *   вместе с оригиналом, а не «с ходу».
+ * - **Регулировка громкости микрофона**: тихий микрофон тянем вверх узлом усиления, громкий —
+ *   приглушаем. Усилитель стоит до рекордера, поэтому в файл попадает уже выправленный звук,
+ *   и индикатор уровня показывает то же, что запишется.
+ * - **Автостоп ровно на длительности реплики**: сервер повторно проверяет длительность.
+ * - **Живая волна**: накапливаем по колонке на долю реплики, чтобы ширина волны совпадала
+ *   с осью времени оригинала.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { peakOf } from '../audio/peaks'
 
-const CANDIDATES = [
-  'audio/webm;codecs=opus',
-  'audio/webm',
-  'audio/ogg;codecs=opus',
-  'audio/mp4',
-]
-
-/** Допуск на хвост энкодера — тот же порядок, что и на сервере. */
-export const RECORD_TOLERANCE_MS = 250
-
-export function pickMimeType(isSupported: (type: string) => boolean): string {
-  for (const candidate of CANDIDATES) {
-    if (isSupported(candidate)) return candidate
-  }
-  return ''
-}
-
-export function extensionFor(mimeType: string): string {
-  if (mimeType.includes('ogg')) return 'ogg'
-  if (mimeType.includes('mp4')) return 'm4a'
-  return 'webm'
-}
-
-export type RecorderStatus = 'idle' | 'requesting' | 'recording' | 'ready' | 'uploading' | 'error'
+export type RecorderStatus = 'idle' | 'preparing' | 'requesting' | 'recording' | 'uploading' | 'ready' | 'error'
 
 export type Recorder = {
   status: RecorderStatus
   elapsedMs: number
+  /** Секунды до начала записи в фазе подготовки (0 — отсчёта нет). */
+  countdown: number
   level: number
   error: string | null
   limitMs: number
   start: () => Promise<void>
   stop: () => void
+  cancel: () => void
   reset: () => void
   /** Накопленная волна текущей записи: колонки слева направо, как по оси времени. */
   getLivePeaks: () => Float32Array
@@ -54,44 +39,88 @@ type Options = {
   onRecorded: (blob: Blob, mimeType: string) => Promise<void> | void
   /** Сколько колонок волны набираем за всю реплику (совпадает с числом колонок подложки). */
   buckets?: number
+  /** Отсчёт перед записью, мс. 0 — начинать сразу. */
+  countdownMs?: number
+  /** Усиление микрофона: 1 — как есть, меньше — тише, больше — громче. */
+  gain?: number
 }
 
-export function useRecorder({ limitMs, onRecorded, buckets = 480 }: Options): Recorder {
+const CANDIDATE_MIME_TYPES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/ogg;codecs=opus',
+  'audio/mp4',
+]
+
+export function pickMimeType(isSupported: (type: string) => boolean): string | null {
+  for (const type of CANDIDATE_MIME_TYPES) {
+    if (isSupported(type)) return type
+  }
+  return null
+}
+
+export function extensionFor(mimeType: string): string {
+  if (mimeType.includes('ogg')) return 'ogg'
+  if (mimeType.includes('mp4')) return 'm4a'
+  if (mimeType.includes('wav')) return 'wav'
+  return 'webm'
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+export function useRecorder({
+  limitMs,
+  onRecorded,
+  buckets = 480,
+  countdownMs = 3000,
+  gain = 1,
+}: Options): Recorder {
   const [status, setStatus] = useState<RecorderStatus>('idle')
   const [elapsedMs, setElapsedMs] = useState(0)
+  const [countdown, setCountdown] = useState(0)
   const [level, setLevel] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   const recorder = useRef<MediaRecorder | null>(null)
-  const chunks = useRef<Blob[]>([])
   const stream = useRef<MediaStream | null>(null)
-  const mimeType = useRef('')
+  const audioCtx = useRef<AudioContext | null>(null)
+  const chunks = useRef<Blob[]>([])
+  const mimeType = useRef<string | null>(null)
   const startedAt = useRef(0)
   const timer = useRef<number | null>(null)
-  const autoStop = useRef<number | null>(null)
-  const audioCtx = useRef<AudioContext | null>(null)
   const frame = useRef<number | null>(null)
+  const autoStop = useRef<number | null>(null)
+  const cancelled = useRef(false)
   const onRecordedRef = useRef(onRecorded)
   // Волна текущей записи: одна колонка на долю реплики, поэтому ширина растёт вместе с временем
   const liveBars = useRef<number[]>([])
   const pendingPeak = useRef(0)
 
-  useEffect(() => {
-    onRecordedRef.current = onRecorded
-  }, [onRecorded])
+  onRecordedRef.current = onRecorded
 
   const cleanup = useCallback(() => {
     if (timer.current !== null) window.clearInterval(timer.current)
-    if (autoStop.current !== null) window.clearTimeout(autoStop.current)
     if (frame.current !== null) cancelAnimationFrame(frame.current)
+    if (autoStop.current !== null) window.clearTimeout(autoStop.current)
     timer.current = null
-    autoStop.current = null
     frame.current = null
-    stream.current?.getTracks().forEach((track) => track.stop())
-    stream.current = null
-    void audioCtx.current?.close().catch(() => undefined)
-    audioCtx.current = null
+    autoStop.current = null
+    if (recorder.current && recorder.current.state !== 'inactive') {
+      try {
+        recorder.current.stop()
+      } catch {
+        /* уже остановлен */
+      }
+    }
     recorder.current = null
+    if (stream.current) {
+      for (const track of stream.current.getTracks()) track.stop()
+      stream.current = null
+    }
+    if (audioCtx.current) {
+      void audioCtx.current.close().catch(() => undefined)
+      audioCtx.current = null
+    }
   }, [])
 
   useEffect(() => cleanup, [cleanup])
@@ -102,8 +131,31 @@ export function useRecorder({ limitMs, onRecorded, buckets = 480 }: Options): Re
     }
   }, [])
 
+  const cancel = useCallback(() => {
+    cancelled.current = true
+    cleanup()
+    setCountdown(0)
+    setStatus('idle')
+    setElapsedMs(0)
+    setLevel(0)
+  }, [cleanup])
+
   const start = useCallback(async () => {
     setError(null)
+    cancelled.current = false
+
+    // Отсчёт: даём время собраться. Отменяется кнопкой «Отмена».
+    if (countdownMs > 0) {
+      setStatus('preparing')
+      const seconds = Math.ceil(countdownMs / 1000)
+      for (let left = seconds; left > 0; left -= 1) {
+        setCountdown(left)
+        await sleep(1000)
+        if (cancelled.current) return
+      }
+      setCountdown(0)
+    }
+
     setStatus('requesting')
     try {
       const media = await navigator.mediaDevices.getUserMedia({
@@ -113,11 +165,38 @@ export function useRecorder({ limitMs, onRecorded, buckets = 480 }: Options): Re
           noiseSuppression: true,
         },
       })
+
+      // Микрофон может вернуться уже отключённым (устройство пропало, доступ отозван):
+      // без этой проверки запись молча получится пустой.
+      const tracks = media.getAudioTracks()
+      if (tracks.length === 0 || tracks.every((track) => track.readyState !== 'live')) {
+        for (const track of media.getTracks()) track.stop()
+        throw new Error('Микрофон не отдаёт звук — проверьте, что устройство подключено')
+      }
+
       stream.current = media
+
+      // Один аудиоконтекст: усиление микрофона, индикатор уровня и поток для рекордера.
+      const ctx = new AudioContext()
+      audioCtx.current = ctx
+      const source = ctx.createMediaStreamSource(media)
+      const gainNode = ctx.createGain()
+      gainNode.gain.value = Math.min(4, Math.max(0.1, gain))
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 1024
+      const dest = ctx.createMediaStreamDestination()
+      source.connect(gainNode)
+      gainNode.connect(analyser)
+      gainNode.connect(dest)
+
+      const recordingStream = dest.stream
       mimeType.current = pickMimeType((type) => MediaRecorder.isTypeSupported(type))
       const instance = mimeType.current
-        ? new MediaRecorder(media, { mimeType: mimeType.current, audioBitsPerSecond: 96000 })
-        : new MediaRecorder(media)
+        ? new MediaRecorder(recordingStream, {
+            mimeType: mimeType.current,
+            audioBitsPerSecond: 96000,
+          })
+        : new MediaRecorder(recordingStream)
       chunks.current = []
       liveBars.current = []
       pendingPeak.current = 0
@@ -127,8 +206,10 @@ export function useRecorder({ limitMs, onRecorded, buckets = 480 }: Options): Re
       instance.onstop = async () => {
         const type = instance.mimeType || mimeType.current || 'audio/webm'
         const blob = new Blob(chunks.current, { type })
+        const wasCancelled = cancelled.current
         cleanup()
         setLevel(0)
+        if (wasCancelled) return
         if (blob.size === 0) {
           setStatus('error')
           setError('Микрофон не записал звук — проверьте доступ и устройство')
@@ -149,12 +230,7 @@ export function useRecorder({ limitMs, onRecorded, buckets = 480 }: Options): Re
       setStatus('recording')
       instance.start(250)
 
-      // Индикатор уровня: показываем, что микрофон реально слышит.
-      const ctx = new AudioContext()
-      audioCtx.current = ctx
-      const analyser = ctx.createAnalyser()
-      analyser.fftSize = 1024
-      ctx.createMediaStreamSource(media).connect(analyser)
+      // Индикатор уровня и живая волна: показываем, что микрофон реально слышит.
       const buffer = new Float32Array(analyser.fftSize)
       const tick = () => {
         analyser.getFloatTimeDomainData(buffer)
@@ -186,25 +262,43 @@ export function useRecorder({ limitMs, onRecorded, buckets = 480 }: Options): Re
     } catch (exc) {
       cleanup()
       setStatus('error')
-      setError(
-        exc instanceof Error && exc.name === 'NotAllowedError'
-          ? 'Доступ к микрофону запрещён — разрешите его в браузере'
-          : 'Не удалось получить доступ к микрофону',
-      )
+      const message = exc instanceof Error ? exc.message : ''
+      if (exc instanceof Error && exc.name === 'NotAllowedError') {
+        setError('Доступ к микрофону запрещён — разрешите его в браузере')
+      } else if (message.startsWith('Микрофон')) {
+        setError(message)
+      } else {
+        setError('Не удалось получить доступ к микрофону')
+      }
     }
-  }, [buckets, cleanup, limitMs, stop])
+  }, [buckets, cleanup, countdownMs, gain, limitMs, stop])
 
   const getLivePeaks = useCallback(() => Float32Array.from(liveBars.current), [])
 
   const reset = useCallback(() => {
+    cancelled.current = true
     cleanup()
+    cancelled.current = false
     setStatus('idle')
     setElapsedMs(0)
+    setCountdown(0)
     setLevel(0)
     setError(null)
     liveBars.current = []
     pendingPeak.current = 0
   }, [cleanup])
 
-  return { status, elapsedMs, level, error, limitMs, start, stop, reset, getLivePeaks }
+  return {
+    status,
+    elapsedMs,
+    countdown,
+    level,
+    error,
+    limitMs,
+    start,
+    stop,
+    cancel,
+    reset,
+    getLivePeaks,
+  }
 }

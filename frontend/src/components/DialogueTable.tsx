@@ -5,7 +5,7 @@
  * и мы не затрём чужую работу молча — покажем подсказку и перечитаем список.
  */
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { api, media } from '../api/client'
 import { formatPrecise } from './VideoPlayer'
@@ -26,6 +26,20 @@ type Props = {
 
 type Filter = 'all' | 'mine' | 'free'
 
+/** Ключ спикера из имени: как на сервере, чтобы «Woman 1» и «woman_1» не разъезжались. */
+function speakerKeyFromLabel(label: string): string {
+  const cleaned = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9а-яё]+/gi, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+  return (cleaned || 'spk_new').slice(0, 32)
+}
+
+/** Локально созданные спикеры: пустой список сервер показать не может, пока нет реплик. */
+const extraSpeakerKey = (roomId: string) => `funyduby:new-speakers:${roomId}`
+
 export function DialogueTable({
   roomId,
   lines,
@@ -44,6 +58,38 @@ export function DialogueTable({
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [busyLine, setBusyLine] = useState<string | null>(null)
+  // Спикеры, созданные вручную до назначения реплик: держим их локально по комнате
+  const [extraSpeakers, setExtraSpeakers] = useState<Speaker[]>(() => {
+    try {
+      const raw = localStorage.getItem(extraSpeakerKey(roomId))
+      return raw ? (JSON.parse(raw) as Speaker[]) : []
+    } catch {
+      return []
+    }
+  })
+
+  useEffect(() => {
+    localStorage.setItem(extraSpeakerKey(roomId), JSON.stringify(extraSpeakers))
+  }, [roomId, extraSpeakers])
+
+  /** Все спикеры для выпадающих списков: серверные плюс созданные вручную. */
+  const allSpeakers = useMemo(() => {
+    const known = new Set(speakers.map((speaker) => speaker.speaker_key))
+    return [...speakers, ...extraSpeakers.filter((speaker) => !known.has(speaker.speaker_key))]
+  }, [speakers, extraSpeakers])
+
+  const createSpeaker = useCallback(() => {
+    const label = window.prompt('Имя нового спикера', 'Новый спикер')
+    if (!label || !label.trim()) return
+    const clean = label.trim()
+    const key = speakerKeyFromLabel(clean)
+    setExtraSpeakers((prev) =>
+      prev.some((speaker) => speaker.speaker_key === key)
+        ? prev
+        : [...prev, { speaker_key: key, speaker_label: clean, lines: 0, total_ms: 0 }],
+    )
+    notify(`Спикер «${clean}» создан — назначьте ему реплики в списке`, true)
+  }, [notify])
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase()
@@ -67,6 +113,22 @@ export function DialogueTable({
       onChanged()
     } finally {
       setBusyLine(null)
+    }
+  }
+
+  async function mergeSpeaker(
+    fromKey: string,
+    intoKey: string,
+    okMessage: string,
+    intoLabel?: string,
+  ) {
+    try {
+      await api.renameSpeaker(roomId, fromKey, { merge_into: intoKey, label: intoLabel })
+      notify(okMessage, true)
+      onChanged()
+    } catch (exc) {
+      notify((exc as ApiError).hint)
+      onChanged()
     }
   }
 
@@ -118,7 +180,7 @@ export function DialogueTable({
         </div>
         <select value={speakerFilter} onChange={(event) => setSpeakerFilter(event.target.value)}>
           <option value="">Все спикеры</option>
-          {speakers.map((speaker) => (
+          {allSpeakers.map((speaker) => (
             <option key={speaker.speaker_key} value={speaker.speaker_key}>
               {speaker.speaker_label} ({speaker.lines})
             </option>
@@ -163,8 +225,33 @@ export function DialogueTable({
                     value={line.speaker_key}
                     onChange={(event) => {
                       const key = event.target.value
+                      if (key === '__new__') {
+                        const label = window.prompt('Имя нового спикера', 'Новый спикер')
+                        if (!label || !label.trim()) return
+                        const clean = label.trim()
+                        setExtraSpeakers((prev) =>
+                          prev.some((item) => item.speaker_key === speakerKeyFromLabel(clean))
+                            ? prev
+                            : [
+                                ...prev,
+                                {
+                                  speaker_key: speakerKeyFromLabel(clean),
+                                  speaker_label: clean,
+                                  lines: 0,
+                                  total_ms: 0,
+                                },
+                              ],
+                        )
+                        void guard(
+                          line,
+                          () => api.updateLine(roomId, line.id, { speaker_label: clean }).then(() => {}),
+                          `Реплика перенесена спикеру «${clean}»`,
+                        )
+                        return
+                      }
                       const label =
-                        speakers.find((speaker) => speaker.speaker_key === key)?.speaker_label ?? key
+                        allSpeakers.find((speaker) => speaker.speaker_key === key)?.speaker_label ??
+                        key
                       void guard(
                         line,
                         () => api.updateLine(roomId, line.id, { speaker_label: label }).then(() => {}),
@@ -172,14 +259,15 @@ export function DialogueTable({
                       )
                     }}
                   >
-                    {!speakers.some((speaker) => speaker.speaker_key === line.speaker_key) && (
+                    {!allSpeakers.some((speaker) => speaker.speaker_key === line.speaker_key) && (
                       <option value={line.speaker_key}>{line.speaker_label}</option>
                     )}
-                    {speakers.map((speaker) => (
+                    {allSpeakers.map((speaker) => (
                       <option key={speaker.speaker_key} value={speaker.speaker_key}>
                         {speaker.speaker_label}
                       </option>
                     ))}
+                    <option value="__new__">＋ новый спикер…</option>
                   </select>
                   {line.is_edited && <span className="badge">правлено</span>}
                   {line.overlaps && <span className="badge warn">перекрытие</span>}
@@ -295,18 +383,82 @@ export function DialogueTable({
         })}
       </div>
 
-      <div className="panel-body row small muted">
-        <span>Переименовать спикера:</span>
-        {speakers.map((speaker) => (
-          <button
-            key={speaker.speaker_key}
-            onClick={() => {
-              const label = window.prompt(`Новое имя для «${speaker.speaker_label}»`, speaker.speaker_label)
-              if (label && label.trim()) void renameSpeaker(speaker.speaker_key, label.trim())
-            }}
-          >
-            {speaker.speaker_label}
+      <div className="panel-body stack small">
+        <div className="row" style={{ gap: '0.4rem' }}>
+          <span className="muted">Спикеры:</span>
+          <button className="ghost" onClick={createSpeaker}>
+            ＋ Новый спикер
           </button>
+          <span className="muted">
+            если диаризация разбила одного человека на нескольких — объедините спикеров
+          </span>
+        </div>
+        {allSpeakers.map((speaker) => (
+          <div key={speaker.speaker_key} className="row" style={{ gap: '0.35rem' }}>
+            <span className="speaker">{speaker.speaker_label}</span>
+            <span className="muted time">{speaker.lines} репл.</span>
+            <button
+              className="ghost"
+              onClick={() => {
+                const label = window.prompt(
+                  `Новое имя для «${speaker.speaker_label}»`,
+                  speaker.speaker_label,
+                )
+                if (label && label.trim()) void renameSpeaker(speaker.speaker_key, label.trim())
+              }}
+            >
+              Переименовать
+            </button>
+            <select
+              value=""
+              title="Перенести все реплики этого спикера — например, если диаризация разделила одного человека на двух"
+              onChange={(event) => {
+                const key = event.target.value
+                if (!key) return
+                if (key === '__new__') {
+                  const label = window.prompt('Имя нового спикера для этих реплик', 'Новый спикер')
+                  if (!label || !label.trim()) return
+                  const clean = label.trim()
+                  setExtraSpeakers((prev) =>
+                    prev.some((item) => item.speaker_key === speakerKeyFromLabel(clean))
+                      ? prev
+                      : [
+                          ...prev,
+                          {
+                            speaker_key: speakerKeyFromLabel(clean),
+                            speaker_label: clean,
+                            lines: 0,
+                            total_ms: 0,
+                          },
+                        ],
+                  )
+                  void mergeSpeaker(
+                    speaker.speaker_key,
+                    speakerKeyFromLabel(clean),
+                    `Все реплики «${speaker.speaker_label}» перенесены спикеру «${clean}»`,
+                    clean,
+                  )
+                  return
+                }
+                const target = allSpeakers.find((item) => item.speaker_key === key)
+                void mergeSpeaker(
+                  speaker.speaker_key,
+                  key,
+                  `Реплики «${speaker.speaker_label}» перенесены спикеру «${target?.speaker_label ?? key}»`,
+                )
+              }}
+            >
+              <option value="">перенести все реплики в…</option>
+              {allSpeakers
+                .filter((item) => item.speaker_key !== speaker.speaker_key)
+                .map((item) => (
+                  <option key={item.speaker_key} value={item.speaker_key}>
+                    {item.speaker_label}
+                  </option>
+                ))}
+              <option value="__new__">＋ нового спикера…</option>
+            </select>
+          </div>
         ))}
       </div>
     </div>

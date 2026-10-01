@@ -156,6 +156,22 @@ def delete_room(room_id: str) -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
+#: Каталоги, которые целиком выводятся из видео: при замене монтажа их содержимое утрачивает
+#: смысл (реплики, дорожки, тейки, сборки). `original` сюда не входит никогда — это сам файл.
+DERIVED_DIRS = ("audio", "speech", "recordings", "rendered", "artifacts")
+
+
+def purge_derived(room_id: str) -> None:
+    """Удалить производные каталоги комнаты, не трогая исходное видео."""
+    import shutil
+
+    root = room_storage_dir(room_id)
+    for name in DERIVED_DIRS:
+        target = root / name
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+
+
 def room_size_bytes(room_id: str) -> int:
     root = room_storage_dir(room_id)
     if not root.exists():

@@ -177,8 +177,19 @@ export const api = {
 
   // ---------------------------------------------------------------- видео и обработка
 
-  uploadVideo(roomId: string, file: File, onProgress: (percent: number) => void) {
-    return uploadWithProgress<VideoMeta>(`/rooms/${roomId}/video`, file, roomId, onProgress)
+  uploadVideo(
+    roomId: string,
+    file: File,
+    onProgress: (percent: number) => void,
+    replace = false,
+  ) {
+    const query = replace ? '?replace=1' : ''
+    return uploadWithProgress<VideoMeta>(
+      `/rooms/${roomId}/video${query}`,
+      file,
+      roomId,
+      onProgress,
+    )
   },
 
   getVideo(roomId: string): Promise<VideoMeta> {
