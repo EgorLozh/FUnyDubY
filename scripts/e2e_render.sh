@@ -72,6 +72,7 @@ check "сборка завершилась" DONE "$RSTATUS"
 check "тейк попал в микс" "$(echo "$RST" | json "d['metrics']['used_takes']")" "1"
 
 OUT="$WORK/final.mp4"
+mkdir -p "$WORK/cmp"
 curl -s -o "$OUT" "$BASE/rooms/$ROOM/renders/$RID/file" -H "X-Participant-Token: $TOKEN"
 check "файл скачался непустым" 1 "$([ -s "$OUT" ] && echo 1 || echo 0)"
 check "длительность файла = длительности исходника" \
@@ -82,11 +83,14 @@ check "картинка скопирована без перекодирован
 
 echo "== в окне реплики звучит записанный тейк, а не оригинальный голос"
 SEC=$(awk -v ms="$START" 'BEGIN{printf "%.3f", ms/1000}')
-ffmpeg -nostdin -v error -y -ss "$SEC" -t "$(awk -v ms="$DUR" 'BEGIN{printf "%.3f", ms/1000}')" -i "$OUT" -ac 1 -ar 48000 "$WORK/win.wav"
-ffmpeg -nostdin -v error -y -ss "$SEC" -t "$(awk -v ms="$DUR" 'BEGIN{printf "%.3f", ms/1000}')" -i "$CLIP" -ac 1 -ar 48000 "$WORK/win_src.wav"
-mkdir -p "$WORK/cmp"
-cp "$WORK/win.wav" "$WORK/win_src.wav" "$WORK/cmp/"
-CMP=$(docker compose cp "$WORK/cmp" api:/tmp 2>/dev/null; echo $?)
+LEN=$(awk -v ms="$DUR" 'BEGIN{printf "%.3f", ms/1000}')
+ffmpeg -nostdin -v error -y -ss "$SEC" -t "$LEN" -i "$OUT" -ac 1 -ar 48000 "$WORK/cmp/win.wav"
+ffmpeg -nostdin -v error -y -ss "$SEC" -t "$LEN" -i "$CLIP" -ac 1 -ar 48000 "$WORK/cmp/win_src.wav"
+# Эталон — сам тейк, который загрузили (сервер отдаёт нормализованный файл реплики)
+curl -s -o "$WORK/cmp/take.wav" "$BASE/rooms/$ROOM/media/recording/$LINE" -H "X-Participant-Token: $TOKEN"
+
+# Считаем в том же контейнере, где лежат инструменты обработки
+docker compose cp "$WORK/cmp" api:/tmp >/dev/null 2>&1
 CORRS=$(docker compose exec -T api python -c "
 import numpy as np, soundfile as sf
 def load(p):
@@ -96,22 +100,14 @@ def corr(a, b):
     n = min(len(a), len(b)); a, b = a[:n] - a[:n].mean(), b[:n] - b[:n].mean()
     d = np.linalg.norm(a) * np.linalg.norm(b)
     return float(np.dot(a, b) / d) if d else 0.0
-win, src = load('/tmp/cmp/win.wav'), load('/tmp/cmp/win_src.wav')
-# тон 220 Гц: считаем долю энергии в полосе 220 Гц вместо корреляции с оригинала
-def tone_share(sig, rate=48000, freq=220.0):
-    spec = np.abs(np.fft.rfft(sig * np.hanning(len(sig))))
-    freqs = np.fft.rfftfreq(len(sig), 1 / rate)
-    band = (freqs > freq - 8) & (freqs < freq + 8)
-    return float(spec[band].sum() / (spec.sum() + 1e-9))
-print(f'{tone_share(win):.3f} {tone_share(src):.3f}')
-" 2>/dev/null | tr -d '\r')
-WIN_TONE=$(echo "$CORRS" | awk '{print $1}')
-SRC_TONE=$(echo "$CORRS" | awk '{print $2}')
-echo "  ..  доля тона 220 Гц: в итоговом файле ${WIN_TONE}, в исходнике ${SRC_TONE}"
-check "в итоговом файле доминирует записанный тон" 1 \
-  "$(awk -v w="${WIN_TONE:-0}" 'BEGIN{print (w+0 > 0.5) ? 1 : 0}')"
-check "в исходнике этого тона нет" 1 \
-  "$(awk -v s="${SRC_TONE:-1}" 'BEGIN{print (s+0 < 0.2) ? 1 : 0}')"
+win, src, take = load('/tmp/cmp/win.wav'), load('/tmp/cmp/win_src.wav'), load('/tmp/cmp/take.wav')
+print(f'{corr(win, take):.3f} {corr(win, src):.3f}')
+" 2>/dev/null | tr -d '')
+WITH_TAKE=$(echo "$CORRS" | awk '{print $1}')
+WITH_SRC=$(echo "$CORRS" | awk '{print $2}')
+echo "  ..  корреляция окна: с моим тейком ${WITH_TAKE}, с оригинальной речью ${WITH_SRC}"
+check "в окне реплики звучит записанный тейк" 1   "$(awk -v c="${WITH_TAKE:-0}" 'BEGIN{print (c+0 > 0.9) ? 1 : 0}')"
+check "оригинальный голос в этом окне не слышен" 1   "$(awk -v c="${WITH_SRC:-1}" 'BEGIN{print (c+0 < 0.2) ? 1 : 0}')"
 
 echo "== уборка"
 curl -s -X DELETE "$BASE/rooms/$ROOM" -H "X-Participant-Token: $TOKEN" > /dev/null
