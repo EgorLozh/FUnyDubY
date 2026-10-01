@@ -31,7 +31,7 @@ if [ ! -f clip.mp4 ]; then
   SPK="[1:a]atrim=0:11.5,adelay=500,volume=1.8,aformat=channel_layouts=stereo[s1]; \
 [2:a]atrim=0:12.5,adelay=11500,volume=1.8,aformat=channel_layouts=stereo[s2]; \
 [3:a]atrim=0:6,adelay=26000,volume=1.8,aformat=channel_layouts=stereo[s3]"
-  MUS="[4:a]atrim=0:33,volume=0.35,aformat=channel_layouts=stereo[mus]"
+  MUS="[3:a]atrim=0:33,volume=0.35,aformat=channel_layouts=stereo[mus]"
 
   ffmpeg -nostdin -v error -y -i spk1.flac -i spk2.flac -i spk3.flac -i music.ogg \
     -filter_complex "$SPK;[s1][s2][s3]amix=inputs=3:normalize=0:duration=longest[sp]; \
