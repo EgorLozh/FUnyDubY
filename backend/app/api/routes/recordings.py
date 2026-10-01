@@ -119,18 +119,20 @@ async def upload_take(
         return recording_to_out(recording)
 
     # Гонка за реплику: чужой захват не перебиваем, свободную — берём себе автоматически,
-    # чтобы «записать» работало без отдельного шага «взять».
-    if line.assigned_participant_id and line.assigned_participant_id != participant.id:
+    # чтобы «записать» работало без отдельного шага «взять». Назначение живёт в таблице
+    # assignments (у реплики такого поля нет), поэтому спрашиваем её явно.
+    assignment = await assignments_service.get_assignment(session, line_id)
+    if assignment is not None and assignment.participant_id != participant.id:
         names = await assignments_service.participant_names(session, room.id)
         raise Conflict(
             "Эту реплику озвучивает другой участник",
             code="line_taken",
             extra={
-                "participant_id": str(line.assigned_participant_id),
-                "display_name": names.get(line.assigned_participant_id),
+                "participant_id": str(assignment.participant_id),
+                "display_name": names.get(assignment.participant_id),
             },
         )
-    if line.assigned_participant_id is None:
+    if assignment is None:
         await assignments_service.claim(session, room.id, line_id, participant.id)
 
     content_type = (file.content_type or "").split(";")[0].strip().lower()
