@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -328,18 +328,40 @@ async def run_stage(
         except Exception as exc:  # noqa: BLE001
             code = getattr(exc, "code", type(exc).__name__)
             detail = getattr(exc, "detail", str(exc)) or type(exc).__name__
-            stage_row.status = StageStatus.FAILED
-            stage_row.error = {"code": code, "message": detail, "stage": stage.value}
-            stage_row.finished_at = datetime.now(UTC)
-            job.status = JobStatus.FAILED
-            job.error = {"code": code, "message": detail, "stage": stage.value}
-            job.finished_at = datetime.now(UTC)
+            log.error("stage_failed", job_id=str(job.id), stage=stage.value, code=code)
+
+            # Сессия могла остаться в состоянии «только откат» (например, IntegrityError при
+            # вставке). Без отката запись статуса падает сама, этап остаётся RUNNING навсегда,
+            # и следующая попытка тоже не проходит. Откатываемся и пишем статус чистыми UPDATE.
+            try:
+                await session.rollback()
+            except Exception as rollback_exc:  # noqa: BLE001
+                log.warning("stage_rollback_failed", error=str(rollback_exc))
+
+            await session.execute(
+                update(JobStage)
+                .where(JobStage.job_id == job.id, JobStage.stage == stage)
+                .values(
+                    status=StageStatus.FAILED,
+                    progress=0,
+                    error={"code": code, "message": detail, "stage": stage.value},
+                    finished_at=datetime.now(UTC),
+                )
+            )
+            await session.execute(
+                update(ProcessingJob)
+                .where(ProcessingJob.id == job.id)
+                .values(
+                    status=JobStatus.FAILED,
+                    error={"code": code, "message": detail, "stage": stage.value},
+                    finished_at=datetime.now(UTC),
+                )
+            )
             await session.commit()
             await _publish(
                 job.room_id,
                 {"type": "job.failed", "stage": stage.value, "code": code, "message": detail},
             )
-            log.error("stage_failed", job_id=str(job.id), stage=stage.value, code=code)
 
             # Постоянные ошибки (4xx: «в видео нет речи», «формат не поддержан», «нет артефакта»)
             # повторной попыткой не лечатся: успешный исход тот же ввод не даст. Раньше мы всё

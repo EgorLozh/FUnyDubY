@@ -12,7 +12,7 @@ import uuid
 from typing import Any
 
 import dramatiq
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text, update
 
 from app.core.errors import DomainError, NotFound
 from app.core.logging import get_logger
@@ -206,9 +206,24 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
     )
     await env.progress_cb(40)
 
-    # Пересоздаём реплики, правки людей (is_edited) не трогаем
+    # Пересоздаём реплики, правки людей (is_edited) не трогаем.
+    #
+    # Порядок важен: сначала уводим нумерацию в «карантин», потом удаляем пересоздаваемые
+    # реплики и только затем вставляем новые. Без карантина новая реплика с idx=2 падала на
+    # уникальном индексе (room_id, idx), если правленая реплика человека занимала тот же idx:
+    # сессия уходила в состояние «только откат», этап оставался RUNNING навсегда, а следующая
+    # нарезка вообще не могла запуститься.
+    quarantine = 100_000
     await session.execute(
-        delete(DialogueLine).where(DialogueLine.room_id == env.room_id, DialogueLine.is_edited.is_(False))
+        update(DialogueLine)
+        .where(DialogueLine.room_id == env.room_id)
+        .values(idx=DialogueLine.idx + quarantine)
+    )
+    await session.flush()
+    await session.execute(
+        delete(DialogueLine).where(
+            DialogueLine.room_id == env.room_id, DialogueLine.is_edited.is_(False)
+        )
     )
     await session.flush()
 
@@ -256,6 +271,26 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
             if position % 10 == 0:
                 await env.progress_cb(70 + int(25 * position / max(1, len(rows))))
         await session.flush()
+
+    # Перенумерация всех реплик комнаты по времени: правленые человеком реплики возвращаются
+    # из карантина на своё место в таймлайне, новые встают рядом с ними.
+    await session.execute(
+        text(
+            """
+            WITH ordered AS (
+                SELECT id, row_number() OVER (ORDER BY start_ms, idx) - 1 AS new_idx
+                FROM dialogue_lines
+                WHERE room_id = :room_id
+            )
+            UPDATE dialogue_lines AS line
+            SET idx = ordered.new_idx
+            FROM ordered
+            WHERE line.id = ordered.id
+            """
+        ),
+        {"room_id": env.room_id},
+    )
+    await session.flush()
 
     # Подчищаем нарезки прошлых прогонов. Реплики пересоздаются с новыми UUID, поэтому старые
     # файлы остаются сиротами: замерено 16 файлов / 17 МБ мусора в одной комнате после
