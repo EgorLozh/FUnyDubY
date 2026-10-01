@@ -335,8 +335,16 @@ if [ -f "data/rooms/$ROOM/speech/background.wav" ]; then
   check "у комнаты один актуальный результат" 1 "$(curl -s "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TA" | json "len([r for r in d if r['is_current']])")"
   check "сборка без чужого токена закрыта" 401 "$(code "$BASE/rooms/$ROOM/renders/$RID/file")"
 else
-  echo "  ..  разделение речи не дало фона — проверяю понятный отказ"
-  check "сборка без фона сообщает причину" artifacts_missing     "$(curl -s -X POST "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{}' | json "d.get('code','')")"
+  echo "  ..  разделения речи в этой комнате нет — проверяю понятный отказ"
+  curl -s -X POST "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TA" -H 'Content-Type: application/json' -d '{}' > /dev/null
+  RID=$(curl -s "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TA" | json "d[0]['id']")
+  for _ in $(seq 1 20); do
+    sleep 3
+    RST=$(curl -s "$BASE/rooms/$ROOM/renders/$RID" -H "X-Participant-Token: $TA")
+    case "$RST" in *'"DONE"'*|*'"FAILED"'*|*'"CANCELED"'*) break;; esac
+  done
+  check "сборка без фона падает с понятной причиной" artifacts_missing     "$(echo "$RST" | json "(d.get('error') or {}).get('code','')")"
+  check "нет готового файла, пока сборка не удалась" 409 "$(code "$BASE/rooms/$ROOM/renders/$RID/file" -H "X-Participant-Token: $TA")"
 fi
 
 echo "== удаление комнаты и purge (Dramatiq)"
