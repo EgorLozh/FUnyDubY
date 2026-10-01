@@ -68,6 +68,10 @@ services:
       # torch >= 2.6 грузит чекпоинты с weights_only=True, а у pyannote старый pickle-формат.
       # Чекпоинты берутся из доверенных источников (HF/pyannote), поэтому флаг уместен.
       - TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+      # Библиотеки из pip-пакетов nvidia-* (cuDNN/cuBLAS, под которые собран torch) должны
+      # идти раньше системных из базового образа, иначе pyannote падает с
+      # «cuDNN version incompatibility: compiled against (9, 24, 0) but found (9, 5, 1)».
+      - LD_LIBRARY_PATH=${ML_LD_LIBRARY_PATH}
     volumes:
       - ./data:/data
       - ./backend/app:/srv/app/app:ro
