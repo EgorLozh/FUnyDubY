@@ -10,12 +10,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv/app
-COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Дефолт — образ разработки (с тестами и линтерами); для прода сборка с --build-arg INSTALL_DEV=false
+ARG INSTALL_DEV=true
+
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --upgrade pip && pip install -r requirements.txt \
+    && if [ "$INSTALL_DEV" = "true" ]; then pip install -r requirements-dev.txt; fi
 
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY app ./app
+COPY tests ./tests
 COPY scripts ./scripts
 
 EXPOSE 8000

@@ -74,25 +74,44 @@ def validate_runtime() -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
     path = Path(argv[0] if argv else ".env")
-    if not path.exists():
-        print(f"Нет файла {path}")
-        return 1
 
-    problems = validate_text(path.read_text(encoding="utf-8")) + validate_runtime()
-    for key in sorted({key for key in KNOWN_KEYS if re.search(rf"^{key}=", path.read_text('utf-8'), re.M)}):
-        value = ""
-        for line in path.read_text("utf-8").splitlines():
-            if line.startswith(f"{key}="):
-                value = line.split("=", 1)[1]
-        masked = f"{value[:7]}…(len {len(value)})" if len(value) > 12 else ("(пусто)" if not value else "***")
-        print(f"  {key:<16} {masked}")
+    problems: list[str] = []
+    if path.exists():
+        text = path.read_text(encoding="utf-8")
+        problems.extend(validate_text(text))
+        keys = sorted(
+            {
+                line.split("=", 1)[0]
+                for line in text.splitlines()
+                if "=" in line and not line.startswith("#")
+            }
+        )
+        for key in keys:
+            value = next(
+                (line.split("=", 1)[1] for line in text.splitlines() if line.startswith(f"{key}=")),
+                "",
+            )
+            masked = (
+                f"{value[:7]}…(len {len(value)})"
+                if len(value) > 12
+                else ("(пусто)" if not value else "***")
+            )
+            print(f"  {key:<16} {masked}")
+    else:
+        print(f"Файл {path} не найден — проверяю только окружение процесса")
+        for key in sorted(k for k in os.environ if k.isupper() and len(k) > 3):
+            if key in KNOWN_KEYS:
+                value = os.environ[key]
+                masked = f"{value[:7]}…(len {len(value)})" if len(value) > 12 else "***"
+                print(f"  {key:<16} {masked}")
 
+    problems.extend(validate_runtime())
     if problems:
         print("\nПРОБЛЕМЫ:")
         for problem in problems:
             print(" -", problem)
         return 1
-    print("\n.env корректен: ключи по одному на строку, значения без склейки")
+    print("\nОкружение корректно: ключи по одному на строку, значения без склейки")
     return 0
 
 
