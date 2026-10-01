@@ -288,12 +288,24 @@ def _speech_leak_only(mix: Audio, speech: Audio, background: Audio, mask: np.nda
     return speech_leak_db(mix, speech, background, mask)[0]
 
 
-def from_stems(mix: Audio, stems: dict[str, Audio], *, ducking_db: float) -> SeparationResult:
-    """Собрать результат из стемов Bandit: фон = music + sfx.
+def from_stems(
+    mix: Audio,
+    stems: dict[str, Audio],
+    *,
+    ducking_db: float,
+    mode: str = "subtract",
+) -> SeparationResult:
+    """Собрать результат из стемов Bandit.
 
-    Здесь принципиально нет вычитания: модель сама отделяет речь, поэтому музыка и эффекты
-    сохраняются без потерь. Дуккинг по умолчанию выключен (`BANDIT_DUCKING_DB=0`) — он был
-    компенсацией «призрака» при вычитании, а не художественным приёмом.
+    Два режима:
+    * `subtract` (по умолчанию) — фон = `mix − α·speech`, где речь — стем Bandit. Стем речи
+      у Bandit почти идеален (совпадение с эталоном в пределах 1 дБ), поэтому вычитание
+      убирает и «призрак», который остаётся в стемах music/sfx.
+    * `stems_sum` — фон = `music + sfx`. Музыка и эффекты сохраняются без потерь, но остаток
+      речи в стеме музыки (замерено ‑13.5 дБ от уровня диалога) слышен как призрак.
+
+    Дуккинг по умолчанию выключен (`BANDIT_DUCKING_DB=0`): он был компенсацией призрака,
+    а не художественным приёмом.
     """
     from app.ml import bandit as bandit_mod
 
@@ -301,52 +313,69 @@ def from_stems(mix: Audio, stems: dict[str, Audio], *, ducking_db: float) -> Sep
     if speech is None:
         raise SeparationFailed("Bandit не вернул стем речи", code="bandit_no_speech_stem")
 
-    background = bandit_mod.sum_stems(stems, ("music", "sfx"), mix.sample_rate)
     if speech.sample_rate != mix.sample_rate:
         speech = bandit_mod.resample_audio(speech, mix.sample_rate)
-        background = bandit_mod.resample_audio(background, mix.sample_rate)
+    speech_stereo = to_stereo(speech)
 
-    speech = to_stereo(speech)
-    background = to_stereo(background)
-    n = min(len(mix.samples), len(speech.samples), len(background.samples))
+    accumulate = dict(stems)
+    background_source = bandit_mod.sum_stems(stems, ("music", "sfx"), mix.sample_rate)
+    if background_source.sample_rate != mix.sample_rate:
+        background_source = bandit_mod.resample_audio(background_source, mix.sample_rate)
+    background_source = to_stereo(background_source)
+
+    n = min(len(mix.samples), len(speech_stereo.samples), len(background_source.samples))
     if n == 0:
         raise SeparationFailed("Пустой микс или пустые стемы", code="bandit_empty_audio")
 
     mix_cut = Audio(mix.samples[:n], mix.sample_rate)
-    speech_cut = Audio(speech.samples[:n], mix.sample_rate)
-    background_cut = Audio(background.samples[:n], mix.sample_rate)
+    speech_cut = Audio(speech_stereo.samples[:n], mix.sample_rate)
 
     hop = max(1, int(mix_cut.sample_rate * 0.05))
     mask_frames = speech_activity_mask(mix_cut, speech_cut, hop_ms=50)
     sample_mask = expand_mask_to_samples(mask_frames, hop, n)
 
+    alpha: float | None = None
+    if mode == "stems_sum":
+        background_cut = Audio(background_source.samples[:n], mix.sample_rate)
+    else:
+        alpha = optimal_scale(mix_cut, speech_cut, mask=sample_mask)
+        samples = mix_cut.samples.astype(np.float32)
+        speech_samples = speech_cut.samples.astype(np.float32)
+        if samples.ndim == 1 and speech_samples.ndim == 2:
+            samples = np.stack([samples, samples], axis=1)
+        background_cut = Audio(
+            np.clip(samples - alpha * speech_samples, -1.0, 1.0), mix.sample_rate
+        )
+
     leak_db, duck_db = speech_leak_db(mix_cut, speech_cut, background_cut, sample_mask)
     quality = {
         "speech_window_gain_db": round(duck_db, 2),
         "bg_speech_projection_db": round(leak_db, 2),
-        "alpha": None,
+        "alpha": None if alpha is None else round(alpha, 3),
         "mix_rms_db": round(rms_db(mix_cut), 2),
         "background_rms_db": round(rms_db(background_cut), 2),
         "background_peak_db": round(peak_db(background_cut), 2),
         "speech_rms_db": round(rms_db(speech_cut), 2),
-        "stem_rms_db": {
-            name: round(rms_db(stem), 2) for name, stem in sorted(stems.items())
-        },
+        "stem_rms_db": {name: round(rms_db(stem), 2) for name, stem in sorted(stems.items())},
         "ducking_db": ducking_db,
     }
     if ducking_db < 0:
         background_cut = duck_background(background_cut, sample_mask, ducking_db)
     if duck_db > 3.0:
         quality["degraded"] = True
-        log.warning("separation_degraded", **{"backend": "bandit_v2", "speech_window_gain_db": round(duck_db, 2)})
+        log.warning(
+            "separation_degraded",
+            backend="bandit_v2",
+            speech_window_gain_db=round(duck_db, 2),
+        )
     return SeparationResult(
         speech=speech_cut,
         background=background_cut,
-        alpha=None,
-        mode="stems_sum",
+        alpha=alpha,
+        mode="bandit_subtract" if mode != "stems_sum" else "stems_sum",
         backend="bandit_v2",
         quality=quality,
-        stems=stems,
+        stems=accumulate,
     )
 
 
@@ -374,7 +403,11 @@ def separate_file(
 
     if backend_name == "bandit_v2":
         try:
-            result = from_stems(mix, _bandit_stems(mix), ducking_db=bandit_ducking_db)
+            stems = _bandit_stems(mix)
+            bandit_mode = "stems_sum" if mode == "stems_sum" else "subtract"
+            result = from_stems(
+                mix, stems, ducking_db=bandit_ducking_db, mode=bandit_mode
+            )
         except Exception as exc:  # noqa: BLE001
             if not fallback:
                 raise

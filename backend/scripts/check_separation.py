@@ -62,7 +62,7 @@ def _report(
             f"  ИСТИННАЯ утечка речи в фон (эталон): проекция {projection:+.2f} дБ, "
             f"по энергии {ratio:+.2f} дБ"
         )
-        for name, audio in sorted(getattr(result, "stems", {}).items()):
+        for name, audio in sorted((getattr(result, "stems", None) or {}).items()):
             stem_projection, stem_ratio = _truth_rejection(mix, audio, truth)
             print(
                 f"    стем {name:<8}: проекция на эталон {stem_projection:+.2f} дБ, "
@@ -121,19 +121,18 @@ def main() -> int:
     primary = settings.separation_model
     if primary == "bandit_v2":
         started = time.perf_counter()
-        result = separation.from_stems(
-            mix,
-            separation._bandit_stems(mix),
-            ducking_db=settings.bandit_ducking_db,
-        )
-        result.backend = "bandit_v2"
-        _report(
-            "Bandit v2 (music+sfx, без вычитания)",
-            mix,
-            result,
-            time.perf_counter() - started,
-            truth,
-        )
+        stems = separation._bandit_stems(mix)
+        inference = time.perf_counter() - started
+        for mode, label in (
+            ("subtract", "Bandit v2: фон = mix − α·речь (стем речи Bandit)"),
+            ("stems_sum", "Bandit v2: фон = music + sfx (сумма стемов)"),
+        ):
+            started = time.perf_counter()
+            result = separation.from_stems(
+                mix, stems, ducking_db=settings.bandit_ducking_db, mode=mode
+            )
+            result.backend = "bandit_v2"
+            _report(label, mix, result, inference + (time.perf_counter() - started), truth)
     else:
         started = time.perf_counter()
         speech = separation.BACKENDS["demucs"](mix)
