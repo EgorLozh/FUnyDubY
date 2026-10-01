@@ -9,6 +9,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { peakOf } from '../audio/peaks'
+
 const CANDIDATES = [
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -43,14 +45,18 @@ export type Recorder = {
   start: () => Promise<void>
   stop: () => void
   reset: () => void
+  /** Накопленная волна текущей записи: колонки слева направо, как по оси времени. */
+  getLivePeaks: () => Float32Array
 }
 
 type Options = {
   limitMs: number
   onRecorded: (blob: Blob, mimeType: string) => Promise<void> | void
+  /** Сколько колонок волны набираем за всю реплику (совпадает с числом колонок подложки). */
+  buckets?: number
 }
 
-export function useRecorder({ limitMs, onRecorded }: Options): Recorder {
+export function useRecorder({ limitMs, onRecorded, buckets = 480 }: Options): Recorder {
   const [status, setStatus] = useState<RecorderStatus>('idle')
   const [elapsedMs, setElapsedMs] = useState(0)
   const [level, setLevel] = useState(0)
@@ -66,6 +72,9 @@ export function useRecorder({ limitMs, onRecorded }: Options): Recorder {
   const audioCtx = useRef<AudioContext | null>(null)
   const frame = useRef<number | null>(null)
   const onRecordedRef = useRef(onRecorded)
+  // Волна текущей записи: одна колонка на долю реплики, поэтому ширина растёт вместе с временем
+  const liveBars = useRef<number[]>([])
+  const pendingPeak = useRef(0)
 
   useEffect(() => {
     onRecordedRef.current = onRecorded
@@ -110,6 +119,8 @@ export function useRecorder({ limitMs, onRecorded }: Options): Recorder {
         ? new MediaRecorder(media, { mimeType: mimeType.current, audioBitsPerSecond: 96000 })
         : new MediaRecorder(media)
       chunks.current = []
+      liveBars.current = []
+      pendingPeak.current = 0
       instance.ondataavailable = (event) => {
         if (event.data.size > 0) chunks.current.push(event.data)
       }
@@ -150,6 +161,16 @@ export function useRecorder({ limitMs, onRecorded }: Options): Recorder {
         let sum = 0
         for (const sample of buffer) sum += sample * sample
         setLevel(Math.min(1, Math.sqrt(sum / buffer.length) * 4))
+
+        // Волна: держим по колонке на каждую долю реплики, чтобы ширина соответствовала времени
+        const peak = peakOf(buffer)
+        if (peak > pendingPeak.current) pendingPeak.current = peak
+        const elapsed = Date.now() - startedAt.current
+        const expected = Math.min(buckets, Math.round((buckets * elapsed) / limitMs))
+        while (liveBars.current.length < expected) {
+          liveBars.current.push(pendingPeak.current)
+          pendingPeak.current = 0
+        }
         frame.current = requestAnimationFrame(tick)
       }
       frame.current = requestAnimationFrame(tick)
@@ -171,7 +192,9 @@ export function useRecorder({ limitMs, onRecorded }: Options): Recorder {
           : 'Не удалось получить доступ к микрофону',
       )
     }
-  }, [cleanup, limitMs, stop])
+  }, [buckets, cleanup, limitMs, stop])
+
+  const getLivePeaks = useCallback(() => Float32Array.from(liveBars.current), [])
 
   const reset = useCallback(() => {
     cleanup()
@@ -179,7 +202,9 @@ export function useRecorder({ limitMs, onRecorded }: Options): Recorder {
     setElapsedMs(0)
     setLevel(0)
     setError(null)
+    liveBars.current = []
+    pendingPeak.current = 0
   }, [cleanup])
 
-  return { status, elapsedMs, level, error, limitMs, start, stop, reset }
+  return { status, elapsedMs, level, error, limitMs, start, stop, reset, getLivePeaks }
 }

@@ -512,3 +512,14 @@ button:focus-visible {
 .toast.ok {
   border-left-color: var(--ok);
 }
+
+/* Волна звука: оригинал бледной подложкой, запись поверх — видно, попадаешь ли в реплику */
+.waveform canvas {
+  display: block;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.07);
+  border: 1px solid var(--border);
+}
+.waveform + .row {
+  align-items: center;
+}

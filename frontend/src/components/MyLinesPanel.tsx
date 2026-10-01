@@ -8,11 +8,13 @@
  * реплика освободится и её сможет взять кто-то другой.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { api, media } from '../api/client'
+import { invalidatePeaks, useAudioPeaks } from '../hooks/useAudioPeaks'
 import { extensionFor, useRecorder } from '../hooks/useRecorder'
 import { formatPrecise } from './VideoPlayer'
+import { Waveform } from './Waveform'
 import type { ApiError, Line, Recording } from '../types'
 
 const HEARTBEAT_MS = 5 * 60 * 1000
@@ -121,8 +123,11 @@ function MyLine({
           },
           () => undefined,
         )
+        invalidatePeaks(media.url(roomId, 'recording', line.id))
         notify(`Реплика озвучена (${(blob.size / 1024).toFixed(0)} КБ)`, true)
         await loadTakes()
+        setPosition(0)
+        void takeReload.current?.()
         onChanged()
       } catch (exc) {
         const error = exc as ApiError
@@ -134,6 +139,35 @@ function MyLine({
 
   const current = takes.find((take) => take.is_current)
   const recording = recorder.status === 'recording'
+
+  // Волны: оригинал — бледная подложка-ориентир, запись — поверх. Адрес тейка постоянный,
+  // поэтому после новой записи кеш волны сбрасываем вручную, иначе останется старая картинка.
+  const originalUrl = line.has_original_audio ? media.url(roomId, 'original', line.id) : null
+  const takeUrl = current ? media.url(roomId, 'recording', line.id) : null
+  const original = useAudioPeaks(originalUrl)
+  const take = useAudioPeaks(takeUrl)
+  const takeReload = useRef<null | (() => Promise<void>)>(null)
+  takeReload.current = take.reload
+  const [playing, setPlaying] = useState<'original' | 'take' | null>(null)
+  const [position, setPosition] = useState(0)
+  const originalAudio = useRef<HTMLAudioElement | null>(null)
+  const takeAudio = useRef<HTMLAudioElement | null>(null)
+
+  const togglePlay = useCallback((which: 'original' | 'take') => {
+    const element = which === 'original' ? originalAudio.current : takeAudio.current
+    const other = which === 'original' ? takeAudio.current : originalAudio.current
+    if (!element) return
+    other?.pause()
+    if (element.paused) {
+      void element
+        .play()
+        .then(() => setPlaying(which))
+        .catch(() => setPlaying(null))
+    } else {
+      element.pause()
+      setPlaying(null)
+    }
+  }, [])
   const elapsed = Math.min(recorder.elapsedMs, recorder.limitMs)
   const leftMs = Math.max(0, recorder.limitMs - elapsed)
 
@@ -177,13 +211,69 @@ function MyLine({
           </div>
         )}
 
-        {current && (
-          <audio
-            controls
-            preload="none"
-            style={{ marginTop: '0.4rem', width: '100%' }}
-            src={media.url(roomId, 'recording', line.id)}
-          />
+        {(originalUrl || takeUrl || recording) && (
+          <div style={{ marginTop: '0.45rem' }}>
+            <Waveform
+              ghost={original.result?.peaks ?? null}
+              peaks={recording ? null : (take.result?.peaks ?? null)}
+              liveSource={recorder.getLivePeaks}
+              active={recording}
+              progress={playing === 'take' ? position : null}
+              label={
+                recording
+                  ? '● идёт запись — волна растёт слева направо'
+                  : takeUrl
+                    ? 'ваша запись'
+                    : 'ваша запись (пока пусто)'
+              }
+              hint={originalUrl ? 'бледная волна — оригинал реплики' : 'оригинал недоступен'}
+            />
+            <div className="row small" style={{ gap: '0.35rem', marginTop: '0.3rem' }}>
+              {originalUrl && (
+                <button className="ghost" onClick={() => togglePlay('original')}>
+                  {playing === 'original' ? '⏸ оригинал' : '▶ оригинал'}
+                </button>
+              )}
+              {takeUrl && (
+                <button className="ghost" onClick={() => togglePlay('take')}>
+                  {playing === 'take' ? '⏸ запись' : '▶ запись'}
+                </button>
+              )}
+              {playing === 'take' && take.result && (
+                <span className="muted">{(position * (take.result.durationMs / 1000)).toFixed(1)} с</span>
+              )}
+            </div>
+            <audio
+              ref={originalAudio}
+              preload="none"
+              hidden
+              src={originalUrl ?? undefined}
+              onTimeUpdate={(event) => {
+                if (playing !== 'original') return
+                const el = event.currentTarget
+                setPosition(el.duration ? el.currentTime / el.duration : 0)
+              }}
+              onEnded={() => {
+                setPlaying(null)
+                setPosition(0)
+              }}
+            />
+            <audio
+              ref={takeAudio}
+              preload="none"
+              hidden
+              src={takeUrl ?? undefined}
+              onTimeUpdate={(event) => {
+                if (playing !== 'take') return
+                const el = event.currentTarget
+                setPosition(el.duration ? el.currentTime / el.duration : 0)
+              }}
+              onEnded={() => {
+                setPlaying(null)
+                setPosition(0)
+              }}
+            />
+          </div>
         )}
 
         {takes.length > 1 && (
