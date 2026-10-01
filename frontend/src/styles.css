@@ -348,6 +348,15 @@ button:focus-visible {
   box-shadow: inset 3px 0 0 var(--ok);
 }
 
+.line.stack {
+  grid-template-columns: 4.6rem minmax(0, 1fr);
+}
+
+.line.stack .actions {
+  grid-column: 2;
+  justify-content: flex-start;
+}
+
 .line .text {
   white-space: pre-wrap;
   word-break: break-word;

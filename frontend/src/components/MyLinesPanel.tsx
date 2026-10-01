@@ -61,7 +61,7 @@ export function MyLinesPanel({
         </div>
       )}
       {mine.map((line) => (
-        <div key={line.id} className={`line mine${line.id === activeLineId ? ' current' : ''}`}>
+        <div key={line.id} className={`line stack mine${line.id === activeLineId ? ' current' : ''}`}>
           <div>
             <div className="time">{formatPrecise(line.start_ms)}</div>
             <div className="time small">{(line.duration_ms / 1000).toFixed(1)} с</div>
