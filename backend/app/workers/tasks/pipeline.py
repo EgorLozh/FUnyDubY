@@ -257,6 +257,27 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
                 await env.progress_cb(70 + int(25 * position / max(1, len(rows))))
         await session.flush()
 
+    # Подчищаем нарезки прошлых прогонов. Реплики пересоздаются с новыми UUID, поэтому старые
+    # файлы остаются сиротами: замерено 16 файлов / 17 МБ мусора в одной комнате после
+    # нескольких запусков нарезки. Файлы сохраняем только для актуальных реплик (включая
+    # правленые людьми — они переживают пересоздание).
+    removed = 0
+    if segments_dir.exists():
+        keep = {
+            f"{line_id}.wav"
+            for (line_id,) in (
+                await session.execute(
+                    select(DialogueLine.id).where(DialogueLine.room_id == env.room_id)
+                )
+            ).all()
+        }
+        for candidate in segments_dir.glob("*.wav"):
+            if candidate.name not in keep:
+                candidate.unlink(missing_ok=True)
+                removed += 1
+        if removed:
+            log.info("stale_segments_removed", room_id=env.room_id, count=removed)
+
     (env.path("dialogue", "lines.json")).write_text(
         json.dumps(
             [
@@ -274,4 +295,9 @@ async def _merge_dialogue(env: StageEnv, session: Any) -> dict[str, Any]:
         ),
         "utf-8",
     )
-    return {"lines": len(lines), "speakers": len(labels), "segments_dir": env.rel("speech", "segments")}
+    return {
+        "lines": len(lines),
+        "speakers": len(labels),
+        "segments_dir": env.rel("speech", "segments"),
+        "stale_segments_removed": removed,
+    }
