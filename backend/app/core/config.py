@@ -97,6 +97,9 @@ class Settings(BaseSettings):
 
     # --- рендер ---
     render_loudness_target: int = -16
+    # Сколько последних сборок комнаты держат файлы на диске: сборка 10-минутного ролика
+    # занимает сотни мегабайт, и держать всю историю незачем — старое чистим.
+    render_keep_files: int = 1
     unrecorded_policy: str = "silent"
 
     # --- прочее ---

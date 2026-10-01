@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.core.errors import Conflict, NotFound
 from app.core.logging import get_logger
 from app.models import DialogueLine, Recording, RenderJob, RenderStatus, Room, Video
+from app.services import storage
 
 log = get_logger("renders")
 
@@ -185,3 +186,55 @@ async def mark_current(session: AsyncSession, render: RenderJob) -> None:
     )
     render.is_current = True
     await session.flush()
+
+
+def _unlink(relative: str | None) -> int:
+    if not relative:
+        return 0
+    try:
+        path = storage.absolute(relative)
+        if path.exists():
+            size = path.stat().st_size
+            path.unlink()
+            return size
+    except Exception as exc:  # noqa: BLE001 — уборка не должна ломать сборку
+        log.warning("render_purge_failed", path=relative, error=str(exc))
+    return 0
+
+
+async def purge_old_render_files(
+    session: AsyncSession, room_id: str, keep_ids: list[uuid.UUID], keep_count: int | None = None
+) -> dict[str, int]:
+    """Убрать файлы старых сборок комнаты, оставив `keep_count` последних.
+
+    История сборок остаётся в БД (видно, что и когда собирали), но файлы 10-минутного ролика
+    занимают сотни мегабайт, поэтому по умолчанию держим только последнюю готовую сборку.
+    """
+    limit = settings.render_keep_files if keep_count is None else keep_count
+    rows = list(
+        await session.scalars(
+            select(RenderJob)
+            .where(
+                RenderJob.room_id == room_id,
+                RenderJob.is_current.is_(False),
+                RenderJob.files_purged.is_(False),
+            )
+            .order_by(RenderJob.created_at.desc())
+        )
+    )
+
+    freed = 0
+    purged = 0
+    for index, row in enumerate(rows):
+        if index < limit or row.id in keep_ids:
+            continue
+        freed += _unlink(row.output_path)
+        freed += _unlink(row.audio_mix_path)
+        row.output_path = None
+        row.audio_mix_path = None
+        row.files_purged = True
+        purged += 1
+    if purged:
+        await session.flush()
+        log.info("render_files_purged", room_id=room_id, count=purged, freed_bytes=freed)
+    return {"purged": purged, "freed_bytes": freed}

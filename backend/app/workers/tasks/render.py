@@ -159,6 +159,11 @@ async def _render(render_id: uuid.UUID) -> dict[str, object]:
             return {"status": "failed", "error": "nothing_recorded"}
 
         # ── 2. Мультиплекс с видео (картинка копируется без перекодирования) ──────
+        audio_bytes = audio_path.stat().st_size
+        source_bytes = Path(video.source_path).stat().st_size if Path(video.source_path).exists() else 0
+        # Место проверяем до кодирования: иначе диск может кончиться на середине файла
+        storage.ensure_space(source_bytes + audio_bytes + 64 * 1024 * 1024)
+
         await _set(session, render, RenderStatus.ENCODING, 75)
         output = out_dir / "final.mp4"
         # Путь в БД относительный (от корня хранилища), а ffmpeg работает из своего cwd —
@@ -176,8 +181,16 @@ async def _render(render_id: uuid.UUID) -> dict[str, object]:
             }, finished_at=_now())
             return {"status": "failed", "error": "render_corrupt"}
 
+        # Промежуточный микс больше не нужен: он весит столько же, сколько дорожка ролика
+        try:
+            audio_path.unlink(missing_ok=True)
+            metrics["audio_wav_bytes"] = audio_bytes
+            metrics["audio_wav_purged"] = True
+        except OSError as exc:  # noqa: BLE001
+            log.warning("render_mix_purge_failed", render_id=str(render.id), error=str(exc))
+
         # ── 3. Готово: актуальный результат комнаты ──────────────────────────────
-        from app.services.renders import mark_current
+        from app.services.renders import mark_current, purge_old_render_files
 
         render.output_path = storage.relative(output)
         render.size_bytes = output.stat().st_size
@@ -185,6 +198,11 @@ async def _render(render_id: uuid.UUID) -> dict[str, object]:
         render.error = None
         await _set(session, render, RenderStatus.DONE, 100, finished_at=_now())
         await mark_current(session, render)
+        await session.commit()
+
+        render.audio_mix_path = None
+        render.metrics = metrics
+        purged = await purge_old_render_files(session, render.room_id, keep_ids=[render.id])
         await session.commit()
 
         log.info(
@@ -196,6 +214,8 @@ async def _render(render_id: uuid.UUID) -> dict[str, object]:
             used_takes=result.used_takes,
             applied_gain_db=result.applied_gain_db,
             loudness=loudness,
+            purged_renders=purged.get("purged", 0),
+            freed_bytes=purged.get("freed_bytes", 0),
         )
         return {
             "status": "done",

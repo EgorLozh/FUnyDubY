@@ -175,6 +175,7 @@ export type Render = {
   size_bytes: number | null
   duration_ms: number | null
   is_current: boolean
+  files_purged: boolean
   options: { unrecorded?: 'silent' | 'original' }
   metrics: RenderMetrics | null
   error: { code?: string; message?: string } | null

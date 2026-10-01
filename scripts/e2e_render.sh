@@ -81,6 +81,21 @@ check "длительность файла = длительности исход
 check "картинка скопирована без перекодирования" h264 \
   "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "$OUT")"
 
+echo "== место на диске: файлы прошлых сборок убираются"
+curl -s -X POST "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TOKEN"   -H 'Content-Type: application/json' -d '{"options":{"unrecorded":"original"}}' > /dev/null
+RID2=$(curl -s "$BASE/rooms/$ROOM/renders" -H "X-Participant-Token: $TOKEN" | json "d[0]['id']")
+for _ in $(seq 1 40); do
+  sleep 3
+  R2=$(curl -s "$BASE/rooms/$ROOM/renders/$RID2" -H "X-Participant-Token: $TOKEN")
+  case "$(echo "$R2" | json "d['status']")" in DONE|FAILED|CANCELED) break;; esac
+done
+check "вторая сборка тоже прошла" DONE "$(echo "$R2" | json "d['status']")"
+check "в миксе появились оригинальные голоса" 1 "$(echo "$R2" | json "1 if d['metrics']['used_originals'] else 0")"
+FIRST=$(curl -s "$BASE/rooms/$ROOM/renders/$RID" -H "X-Participant-Token: $TOKEN")
+check "файлы прошлой сборки убраны" True "$(echo "$FIRST" | json "d['files_purged']")"
+check "старая сборка больше не скачивается" render_file_purged   "$(curl -s "$BASE/rooms/$ROOM/renders/$RID/file" -H "X-Participant-Token: $TOKEN" | json "d.get('code','')")"
+check "актуальная сборка скачивается" 200 "$(code "$BASE/rooms/$ROOM/renders/$RID2/file" -H "X-Participant-Token: $TOKEN")"
+
 echo "== в окне реплики звучит записанный тейк, а не оригинальный голос"
 SEC=$(awk -v ms="$START" 'BEGIN{printf "%.3f", ms/1000}')
 LEN=$(awk -v ms="$DUR" 'BEGIN{printf "%.3f", ms/1000}')

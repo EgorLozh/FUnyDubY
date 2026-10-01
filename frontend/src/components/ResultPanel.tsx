@@ -198,15 +198,18 @@ export function ResultPanel({
             {renders.map((r) => (
               <li key={r.id}>
                 {new Date(r.created_at).toLocaleString('ru-RU')} · {STAGE_LABEL[r.status] ?? r.status}
-                {r.status === 'DONE' && (
-                  <>
-                    {' · '}
-                    {humanSize(r.size_bytes)} ·{' '}
-                    <a href={media.renderDownloadUrl(room.id, r.id)} download>
-                      скачать
-                    </a>
-                  </>
-                )}
+                {r.status === 'DONE' &&
+                  (r.files_purged ? (
+                    <span className="muted"> · файл удалён (место на диске)</span>
+                  ) : (
+                    <>
+                      {' · '}
+                      {humanSize(r.size_bytes)} ·{' '}
+                      <a href={media.renderDownloadUrl(room.id, r.id)} download>
+                        скачать
+                      </a>
+                    </>
+                  ))}
               </li>
             ))}
           </ul>

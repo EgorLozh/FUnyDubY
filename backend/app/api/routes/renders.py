@@ -87,6 +87,11 @@ async def download_render(
     render_id: uuid.UUID,
 ) -> Response:
     render = await renders_service.get_render(session, room.id, render_id)
+    if render.status == RenderStatus.DONE and render.files_purged:
+        raise Conflict(
+            "Файл этой сборки удалён, чтобы не занимать диск — соберите озвучку заново",
+            code="render_file_purged",
+        )
     if render.status != RenderStatus.DONE or not render.output_path:
         raise Conflict("Результат ещё не готов", code="render_not_ready")
     path = storage.absolute(render.output_path)

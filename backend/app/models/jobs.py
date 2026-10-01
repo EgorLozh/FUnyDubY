@@ -156,6 +156,8 @@ class RenderJob(Base, TimestampMixin):
     error: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # Метрики сборки: сколько тейков ушло в микс, истинная громкость, сработавший потолок.
     metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Файлы старой сборки удалены (история остаётся, скачать уже нельзя)
+    files_purged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

@@ -35,6 +35,7 @@ class RenderOut(BaseModel):
     size_bytes: int | None = None
     duration_ms: int | None = None
     is_current: bool
+    files_purged: bool = False
     options: dict[str, Any] = {}
     metrics: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
@@ -46,7 +47,7 @@ class RenderOut(BaseModel):
 
 def render_to_out(render: RenderJob) -> RenderOut:
     out = RenderOut.model_validate(render)
-    if render.status.value == "DONE":
+    if render.status.value == "DONE" and not render.files_purged:
         out.file_url = f"/api/rooms/{render.room_id}/media/render/{render.id}"
         out.download_url = f"/api/rooms/{render.room_id}/renders/{render.id}/file"
     return out
