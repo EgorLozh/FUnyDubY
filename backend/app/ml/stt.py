@@ -61,6 +61,38 @@ def _resolve_local_model(download_root: Path, model_name: str) -> str:
     return model_name
 
 
+def load_audio_16k(path: Path) -> "np.ndarray":
+    """Декодировать аудио в моно 16 кГц float32 своими средствами (soundfile).
+
+    Так мы обходим PyAV: faster-whisper 1.1.1 вызывает `av.open(..., metadata_errors=…)`,
+    которого нет ни в одной актуальной версии PyAV, и падает с TypeError. Плюс свой
+    декодер не зависит от контейнера: WAV читается всегда.
+    """
+    import numpy as np
+
+    from app.ml.audio_io import read
+
+    audio = read(path, mono=True)
+    samples = audio.samples.astype(np.float32)
+    if audio.sample_rate == 16000:
+        return samples
+
+    target = 16000
+    try:
+        from math import gcd
+
+        from scipy.signal import resample_poly
+
+        divisor = gcd(int(audio.sample_rate), target)
+        return resample_poly(samples, target // divisor, int(audio.sample_rate) // divisor).astype(
+            np.float32
+        )
+    except ImportError:
+        count = int(len(samples) * target / audio.sample_rate)
+        positions = np.linspace(0, len(samples), count, endpoint=False)
+        return np.interp(positions, np.arange(len(samples)), samples).astype(np.float32)
+
+
 def _transcribe_whisper(
     audio_path: Path,
     *,
@@ -79,7 +111,7 @@ def _transcribe_whisper(
     )
 
     segments, info = model.transcribe(
-        str(audio_path),
+        load_audio_16k(audio_path),
         language=language or None,
         word_timestamps=True,
         vad_filter=True,
