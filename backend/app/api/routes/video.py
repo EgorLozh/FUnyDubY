@@ -9,6 +9,7 @@ from fastapi import APIRouter, File, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import ParticipantDep, RoomDep, SessionDep
+from app.api.files import file_response
 from app.core.errors import NotFound
 from app.core.logging import get_logger
 from app.schemas.video import VideoOut
@@ -53,28 +54,6 @@ async def get_video(room: RoomDep, session: SessionDep) -> VideoOut:
     return VideoOut.model_validate(video)
 
 
-def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
-    """Разобрать `Range: bytes=start-end`. Возвращает (start, end) включительно."""
-    if not header or not header.startswith("bytes="):
-        return None
-    spec = header[len("bytes=") :].split(",")[0].strip()
-    start_s, _, end_s = spec.partition("-")
-    try:
-        if start_s == "":  # суффикс: последние N байт
-            length = int(end_s)
-            if length <= 0:
-                return None
-            start = max(0, size - length)
-            return start, size - 1
-        start = int(start_s)
-        end = int(end_s) if end_s else size - 1
-    except ValueError:
-        return None
-    if start >= size:
-        return None
-    return start, min(end, size - 1)
-
-
 @router.get("/{room_id}/video/file")
 async def stream_video(request: Request, room: RoomDep, session: SessionDep):
     """Отдать исходный файл. Всегда через API — том наружу не выставлен."""
@@ -83,29 +62,12 @@ async def stream_video(request: Request, room: RoomDep, session: SessionDep):
     if not path.exists():
         raise NotFound("Файл видео не найден в хранилище", code="video_file_missing")
 
-    size = path.stat().st_size
     content_type = CONTENT_TYPES.get(video.container.split(",")[0].strip(), "video/mp4")
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Disposition": f'inline; filename="{video.original_filename}"',
-        "Cache-Control": "private, max-age=3600",
-    }
-
-    rng = _parse_range(request.headers.get("Range"), size)
-    if rng is None:
-        headers["Content-Length"] = str(size)
-        return StreamingResponse(
-            storage.stream_file(path), media_type=content_type, headers=headers
-        )
-
-    start, end = rng
-    headers["Content-Range"] = f"bytes {start}-{end}/{size}"
-    headers["Content-Length"] = str(end - start + 1)
-    return StreamingResponse(
-        storage.stream_file(path, start, end),
-        status_code=status.HTTP_206_PARTIAL_CONTENT,
-        media_type=content_type,
-        headers=headers,
+    return file_response(
+        request,
+        path,
+        content_type=content_type,
+        filename=video.original_filename,
     )
 
 
