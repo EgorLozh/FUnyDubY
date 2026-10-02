@@ -159,6 +159,14 @@ export const api = {
     return request<Room>(`/rooms/${roomId}`, { roomId })
   },
 
+  /** Правка настроек комнаты (например шумоподавления записей). */
+  updateRoomSettings(
+    roomId: string,
+    patch: { denoise?: boolean; ducking_db?: number },
+  ): Promise<Room> {
+    return request<Room>(`/rooms/${roomId}`, { method: 'PATCH', body: patch, roomId })
+  },
+
   joinRoom(roomId: string, displayName: string): Promise<ParticipantRegistered> {
     return request<ParticipantRegistered>(`/rooms/${roomId}/participants`, {
       body: { display_name: displayName },
@@ -297,14 +305,16 @@ export const api = {
     roomId: string,
     lineId: string,
     blob: Blob,
-    options: { idempotencyKey: string; filename?: string },
+    options: { idempotencyKey: string; filename?: string; leadInMs?: number },
     onProgress?: (percent: number) => void,
   ): Promise<Recording> {
     return new Promise((resolve, reject) => {
       const form = new FormData()
       form.append('file', blob, options.filename ?? 'take.webm')
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', `${API_BASE}/rooms/${roomId}/lines/${lineId}/recordings`)
+      const leadIn = options.leadInMs ?? 0
+      const query = leadIn > 0 ? `?lead_in_ms=${Math.round(leadIn)}` : ''
+      xhr.open('POST', `${API_BASE}/rooms/${roomId}/lines/${lineId}/recordings${query}`)
       const token = session.token(roomId)
       if (token) xhr.setRequestHeader('X-Participant-Token', token)
       xhr.setRequestHeader('Idempotency-Key', options.idempotencyKey)
@@ -423,8 +433,13 @@ export const media = {
     return `${API_BASE}/rooms/${roomId}/renders/${renderId}/file`
   },
 
-  url(roomId: string, kind: MediaKind, ref: string): string {
-    return `${API_BASE}/rooms/${roomId}/media/${kind}/${encodeURIComponent(ref)}`
+  /**
+   * Адрес медиа. `version` дописывается к адресу: после перезаписи реплики файл лежит по тому
+   * же пути, и без версии браузер отдаёт из кеша старую запись, хотя в сборку идёт новая.
+   */
+  url(roomId: string, kind: MediaKind, ref: string, version?: string | number): string {
+    const base = `${API_BASE}/rooms/${roomId}/media/${kind}/${encodeURIComponent(ref)}`
+    return version === undefined ? base : `${base}?v=${encodeURIComponent(String(version))}`
   },
   videoUrl(roomId: string): string {
     return `${API_BASE}/rooms/${roomId}/video/file`

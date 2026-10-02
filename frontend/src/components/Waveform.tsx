@@ -23,6 +23,10 @@ export type WaveformProps = {
   progress?: number | null
   /** Сколько всего колонок по оси времени (для живой волны). */
   buckets?: number
+  /** Остаток «разгона» в мс: пока он есть, запись ещё не реплика — зону затемняем. */
+  leadInLeftMs?: number | null
+  /** Длительность «разгона» — чтобы понимать долю затемнённой зоны. */
+  leadInTotalMs?: number
   height?: number
   label?: string
   hint?: string
@@ -47,6 +51,8 @@ export function Waveform({
   active = false,
   progress = null,
   buckets = 480,
+  leadInLeftMs = null,
+  leadInTotalMs = 3000,
   height = 56,
   label,
   hint,
@@ -106,6 +112,20 @@ export function Waveform({
       // Подложка — оригинал: рисуем первым, чтобы запись легла сверху
       if (ghost && ghost.length > 0) drawBars(ghost, GHOST_COLOR, width / ghost.length)
 
+      // Разгон: пока реплика не началась, затемняем зону, в которую запись идёт «в мусор»,
+      // и показываем границу — с неё начнётся сама реплика и совпадёт с подложкой.
+      if (active && leadInLeftMs !== null && leadInLeftMs > 0 && leadInTotalMs > 0) {
+        const leadWidth = width * (leadInLeftMs / leadInTotalMs)
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.45)'
+        ctx.fillRect(0, 0, leadWidth, height)
+        ctx.strokeStyle = PLAYHEAD_COLOR
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(leadWidth, 2)
+        ctx.lineTo(leadWidth, height - 2)
+        ctx.stroke()
+      }
+
       const live = active && liveSource ? liveSource() : null
       if (live && live.length > 0) {
         drawBars(live, LIVE_COLOR, barWidth)
@@ -148,7 +168,7 @@ export function Waveform({
       if (frame.current !== null) cancelAnimationFrame(frame.current)
       frame.current = null
     }
-  }, [ghost, peaks, liveSource, active, progress, buckets, height])
+  }, [ghost, peaks, liveSource, active, progress, buckets, height, leadInLeftMs, leadInTotalMs])
 
   return (
     <div className="waveform">

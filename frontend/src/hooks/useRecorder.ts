@@ -2,8 +2,10 @@
  * Запись реплики с микрофона.
  *
  * Особенности, которые важны для озвучки:
- * - **Отсчёт перед записью** (по умолчанию 3 секунды): участник успевает вдохнуть и начать
- *   вместе с оригиналом, а не «с ходу».
+ * - **Разгон** (по умолчанию 3 секунды): запись начинается сразу по нажатию, но первые секунды
+ *   намеренно уходят в мусор — за это время участник собирается и начинает вместе с оригиналом.
+ *   Сервер обрезает разгон, поэтому в реплику он не попадает, а волна записи совпадает с волной
+ *   оригинала.
  * - **Регулировка громкости микрофона**: тихий микрофон тянем вверх узлом усиления, громкий —
  *   приглушаем. Усилитель стоит до рекордера, поэтому в файл попадает уже выправленный звук,
  *   и индикатор уровня показывает то же, что запишется.
@@ -16,13 +18,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { peakOf } from '../audio/peaks'
 
-export type RecorderStatus = 'idle' | 'preparing' | 'requesting' | 'recording' | 'uploading' | 'ready' | 'error'
+export type RecorderStatus =
+  | 'idle'
+  | 'requesting'
+  | 'recording'
+  | 'uploading'
+  | 'ready'
+  | 'error'
 
 export type Recorder = {
   status: RecorderStatus
   elapsedMs: number
-  /** Секунды до начала записи в фазе подготовки (0 — отсчёта нет). */
-  countdown: number
+  /** Сколько осталось до конца «разгона»: пока больше нуля, реплика ещё не пишется. */
+  leadInLeftMs: number
   level: number
   error: string | null
   limitMs: number
@@ -39,8 +47,8 @@ type Options = {
   onRecorded: (blob: Blob, mimeType: string) => Promise<void> | void
   /** Сколько колонок волны набираем за всю реплику (совпадает с числом колонок подложки). */
   buckets?: number
-  /** Отсчёт перед записью, мс. 0 — начинать сразу. */
-  countdownMs?: number
+  /** «Разгон»: сколько первых миллисекунд записи отбросить, мс. 0 — писать сразу в реплику. */
+  leadInMs?: number
   /** Усиление микрофона: 1 — как есть, меньше — тише, больше — громче. */
   gain?: number
 }
@@ -66,18 +74,16 @@ export function extensionFor(mimeType: string): string {
   return 'webm'
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
 export function useRecorder({
   limitMs,
   onRecorded,
   buckets = 480,
-  countdownMs = 3000,
+  leadInMs = 0,
   gain = 1,
 }: Options): Recorder {
   const [status, setStatus] = useState<RecorderStatus>('idle')
   const [elapsedMs, setElapsedMs] = useState(0)
-  const [countdown, setCountdown] = useState(0)
+  const [leadInLeftMs, setLeadInLeftMs] = useState(0)
   const [level, setLevel] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
@@ -87,6 +93,8 @@ export function useRecorder({
   const chunks = useRef<Blob[]>([])
   const mimeType = useRef<string | null>(null)
   const startedAt = useRef(0)
+  /** Момент, с которого пишется сама реплика (начало записи плюс разгон). */
+  const takeStartAt = useRef(0)
   const timer = useRef<number | null>(null)
   const frame = useRef<number | null>(null)
   const autoStop = useRef<number | null>(null)
@@ -126,6 +134,10 @@ export function useRecorder({
   useEffect(() => cleanup, [cleanup])
 
   const stop = useCallback(() => {
+    // Стоп во время разгона: реплика ещё не началась, сохранять нечего — это отмена.
+    if (Date.now() < takeStartAt.current) {
+      cancelled.current = true
+    }
     if (recorder.current && recorder.current.state !== 'inactive') {
       recorder.current.stop()
     }
@@ -134,7 +146,7 @@ export function useRecorder({
   const cancel = useCallback(() => {
     cancelled.current = true
     cleanup()
-    setCountdown(0)
+    setLeadInLeftMs(0)
     setStatus('idle')
     setElapsedMs(0)
     setLevel(0)
@@ -143,19 +155,6 @@ export function useRecorder({
   const start = useCallback(async () => {
     setError(null)
     cancelled.current = false
-
-    // Отсчёт: даём время собраться. Отменяется кнопкой «Отмена».
-    if (countdownMs > 0) {
-      setStatus('preparing')
-      const seconds = Math.ceil(countdownMs / 1000)
-      for (let left = seconds; left > 0; left -= 1) {
-        setCountdown(left)
-        await sleep(1000)
-        if (cancelled.current) return
-      }
-      setCountdown(0)
-    }
-
     setStatus('requesting')
     try {
       const media = await navigator.mediaDevices.getUserMedia({
@@ -209,7 +208,13 @@ export function useRecorder({
         const wasCancelled = cancelled.current
         cleanup()
         setLevel(0)
-        if (wasCancelled) return
+        if (wasCancelled) {
+          // Отмена (в том числе стоп во время разгона): тейка нет, состояние — в покое.
+          setStatus('idle')
+          setElapsedMs(0)
+          setLeadInLeftMs(0)
+          return
+        }
         if (blob.size === 0) {
           setStatus('error')
           setError('Микрофон не записал звук — проверьте доступ и устройство')
@@ -226,7 +231,10 @@ export function useRecorder({
       }
       recorder.current = instance
       startedAt.current = Date.now()
+      // Реплика начинается после разгона: до этого момента запись идёт «в мусор»
+      takeStartAt.current = Date.now() + leadInMs
       setElapsedMs(0)
+      setLeadInLeftMs(leadInMs)
       setStatus('recording')
       instance.start(250)
 
@@ -238,10 +246,14 @@ export function useRecorder({
         for (const sample of buffer) sum += sample * sample
         setLevel(Math.min(1, Math.sqrt(sum / buffer.length) * 4))
 
-        // Волна: держим по колонке на каждую долю реплики, чтобы ширина соответствовала времени
+        // Волна: колонки начинаем копить только после разгона, иначе своя запись уезжала бы
+        // вправо относительно оригинала, а звук разгона в реплику не попадает вовсе.
         const peak = peakOf(buffer)
-        if (peak > pendingPeak.current) pendingPeak.current = peak
-        const elapsed = Date.now() - startedAt.current
+        const takeElapsed = Date.now() - takeStartAt.current
+        if (takeElapsed > 0) {
+          if (peak > pendingPeak.current) pendingPeak.current = peak
+        }
+        const elapsed = Math.max(0, takeElapsed)
         const expected = Math.min(buckets, Math.round((buckets * elapsed) / limitMs))
         while (liveBars.current.length < expected) {
           liveBars.current.push(pendingPeak.current)
@@ -252,13 +264,15 @@ export function useRecorder({
       frame.current = requestAnimationFrame(tick)
 
       timer.current = window.setInterval(() => {
-        setElapsedMs(Date.now() - startedAt.current)
+        const now = Date.now()
+        setLeadInLeftMs(Math.max(0, takeStartAt.current - now))
+        setElapsedMs(Math.max(0, now - takeStartAt.current))
       }, 100)
 
-      // Жёсткий автостоп: запись не может быть длиннее реплики.
+      // Жёсткий автостоп: разгон плюс длительность реплики, и ни миллисекунды больше.
       autoStop.current = window.setTimeout(() => {
         stop()
-      }, limitMs)
+      }, limitMs + leadInMs)
     } catch (exc) {
       cleanup()
       setStatus('error')
@@ -271,7 +285,7 @@ export function useRecorder({
         setError('Не удалось получить доступ к микрофону')
       }
     }
-  }, [buckets, cleanup, countdownMs, gain, limitMs, stop])
+  }, [buckets, cleanup, gain, leadInMs, limitMs, stop])
 
   const getLivePeaks = useCallback(() => Float32Array.from(liveBars.current), [])
 
@@ -281,7 +295,7 @@ export function useRecorder({
     cancelled.current = false
     setStatus('idle')
     setElapsedMs(0)
-    setCountdown(0)
+    setLeadInLeftMs(0)
     setLevel(0)
     setError(null)
     liveBars.current = []
@@ -291,7 +305,7 @@ export function useRecorder({
   return {
     status,
     elapsedMs,
-    countdown,
+    leadInLeftMs,
     level,
     error,
     limitMs,

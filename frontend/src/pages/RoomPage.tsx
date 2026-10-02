@@ -153,6 +153,29 @@ export function RoomPage() {
         >
           Ссылка
         </button>
+        {room && (
+          <label
+            className="row small muted"
+            style={{ gap: '0.3rem' }}
+            title="Убирать шум и гул с микрофона при обработке записи: фильтр низа и адаптивное шумоподавление"
+          >
+            <input
+              type="checkbox"
+              checked={room.settings?.denoise !== false}
+              onChange={async (event) => {
+                const next = event.target.checked
+                try {
+                  await api.updateRoomSettings(roomId, { denoise: next })
+                  notify(next ? 'Шумоподавление включено' : 'Шумоподавление выключено', true)
+                  await reload()
+                } catch (exc) {
+                  notify((exc as ApiError).hint)
+                }
+              }}
+            />
+            шумоподавление
+          </label>
+        )}
         {hasVideo && (
           <label className="button ghost" style={{ cursor: 'pointer' }} title="Загрузить другой файл вместо текущего">
             Заменить видео

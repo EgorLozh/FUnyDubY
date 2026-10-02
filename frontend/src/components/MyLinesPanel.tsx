@@ -20,6 +20,12 @@ import type { ApiError, Line, Recording } from '../types'
 const HEARTBEAT_MS = 5 * 60 * 1000
 /** Громкость микрофона храним локально: у каждого участника своё железо и свой уровень. */
 const GAIN_KEY = 'funyduby:mic-gain'
+/**
+ * «Разгон» перед репликой: запись стартует сразу по нажатию, но первые три секунды уходят в
+ * мусор — участник собирается и начинает вместе с оригиналом. Сервер их обрезает, поэтому
+ * в реплику разгон не попадает, а волна записи совпадает с волной оригинала.
+ */
+const LEAD_IN_MS = 3000
 
 export function MyLinesPanel({
   roomId,
@@ -117,7 +123,7 @@ function MyLine({
 
   const recorder = useRecorder({
     limitMs: line.duration_ms,
-    countdownMs: 3000,
+    leadInMs: LEAD_IN_MS,
     gain: micGain,
     onRecorded: async (blob, mimeType) => {
       try {
@@ -128,10 +134,12 @@ function MyLine({
           {
             idempotencyKey: `${line.id}:${Date.now()}`,
             filename: `take-${line.id.slice(0, 8)}.${extensionFor(mimeType)}`,
+            leadInMs: LEAD_IN_MS,
           },
           () => undefined,
         )
         invalidatePeaks(media.url(roomId, 'recording', line.id))
+        invalidatePeaks(media.url(roomId, 'recording', line.id, media.url(roomId, 'recording', line.id).length))
         notify(`Реплика озвучена (${(blob.size / 1024).toFixed(0)} КБ)`, true)
         await loadTakes()
         setPosition(0)
@@ -146,8 +154,10 @@ function MyLine({
   })
 
   const current = takes.find((take) => take.is_current)
+  const leadInLeftMs = recorder.leadInLeftMs
   const recording = recorder.status === 'recording'
-  const preparing = recorder.status === 'preparing'
+  /** Идёт разгон: запись уже пишется, но реплика ещё не началась. */
+  const leadIn = leadInLeftMs > 0
 
   useEffect(() => {
     localStorage.setItem(GAIN_KEY, String(micGain))
@@ -155,8 +165,12 @@ function MyLine({
 
   // Волны: оригинал — бледная подложка-ориентир, запись — поверх. Адрес тейка постоянный,
   // поэтому после новой записи кеш волны сбрасываем вручную, иначе останется старая картинка.
-  const originalUrl = line.has_original_audio ? media.url(roomId, 'original', line.id) : null
-  const takeUrl = current ? media.url(roomId, 'recording', line.id) : null
+  const originalUrl = line.has_original_audio
+    ? media.url(roomId, 'original', line.id, line.version)
+    : null
+  // Версия обязательна: путь тейка не меняется, и без неё браузер играл старую запись,
+  // хотя в сборку уже уходила новая.
+  const takeUrl = current ? media.url(roomId, 'recording', line.id, current.id) : null
   const original = useAudioPeaks(originalUrl)
   const take = useAudioPeaks(takeUrl)
   const takeReload = useRef<null | (() => Promise<void>)>(null)
@@ -200,24 +214,25 @@ function MyLine({
           {line.overlaps && <span className="badge warn">перекрытие</span>}
         </div>
 
-        {preparing && (
-          <div style={{ marginTop: '0.5rem' }} className="row small">
-            <span style={{ color: 'var(--accent)' }}>● приготовьтесь: {recorder.countdown}</span>
-            <span className="muted">запись начнётся сама</span>
-            <button className="ghost" onClick={recorder.cancel}>
-              Отмена
-            </button>
-          </div>
-        )}
-
         {recording && (
           <div style={{ marginTop: '0.5rem' }}>
             <div className="row small">
-              <span style={{ color: 'var(--accent)' }}>● запись</span>
-              <span className="time">
-                {(elapsed / 1000).toFixed(1)} / {(recorder.limitMs / 1000).toFixed(1)} с
+              <span style={{ color: 'var(--accent)' }}>
+                {leadIn ? '● разгон' : '● запись'}
               </span>
-              <span className="muted">осталось {(leftMs / 1000).toFixed(1)} с</span>
+              {leadIn ? (
+                <span className="muted">
+                  реплика начнётся через {(leadInLeftMs / 1000).toFixed(1)} с — эти секунды
+                  будут обрезаны
+                </span>
+              ) : (
+                <>
+                  <span className="time">
+                    {(elapsed / 1000).toFixed(1)} / {(recorder.limitMs / 1000).toFixed(1)} с
+                  </span>
+                  <span className="muted">осталось {(leftMs / 1000).toFixed(1)} с</span>
+                </>
+              )}
             </div>
             <div className="progress" style={{ marginTop: '0.25rem' }}>
               <span style={{ width: `${Math.min(100, (elapsed / recorder.limitMs) * 100)}%` }} />
@@ -242,6 +257,7 @@ function MyLine({
               liveSource={recorder.getLivePeaks}
               active={recording}
               progress={playing === 'take' ? position : null}
+              leadInLeftMs={recording ? leadInLeftMs : null}
               label={
                 recording
                   ? '● идёт запись — волна растёт слева направо'
@@ -303,25 +319,21 @@ function MyLine({
 
       <div className="actions">
         {recording ? (
-          <button className="primary" onClick={recorder.stop}>
-            Стоп
+          <button className="primary" onClick={leadIn ? recorder.cancel : recorder.stop}>
+            {leadIn ? 'Отменить разгон' : 'Стоп'}
           </button>
         ) : (
           <button
             className="primary"
-            disabled={
-              preparing || recorder.status === 'uploading' || recorder.status === 'requesting'
-            }
+            disabled={recorder.status === 'uploading' || recorder.status === 'requesting'}
             onClick={() => void recorder.start()}
             title={`Запись ограничена длительностью реплики: ${(line.duration_ms / 1000).toFixed(1)} с. Перед началом будет отсчёт 3 секунды`}
           >
-            {preparing
-              ? `Приготовьтесь: ${recorder.countdown}`
-              : recorder.status === 'uploading'
-                ? 'Отправка…'
-                : current
-                  ? 'Перезаписать'
-                  : `🎙 Записать (${(line.duration_ms / 1000).toFixed(1)} с)`}
+            {recorder.status === 'uploading'
+              ? 'Отправка…'
+              : current
+                ? 'Перезаписать'
+                : `🎙 Записать (${(line.duration_ms / 1000).toFixed(1)} с)`}
           </button>
         )}
         <button disabled={!line.has_original_audio} onClick={() => onPlayOriginal(line.id)}>
@@ -336,7 +348,7 @@ function MyLine({
             max={4}
             step={0.25}
             value={micGain}
-            disabled={recording || preparing}
+            disabled={recording}
             onChange={(event) => setMicGain(Number(event.target.value))}
             style={{ width: 90 }}
           />

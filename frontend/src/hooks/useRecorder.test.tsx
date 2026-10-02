@@ -135,7 +135,7 @@ describe('хук записи', () => {
 
   it('останавливает запись сама на длительности реплики', async () => {
     const onRecorded = vi.fn(async () => undefined)
-    const { result } = renderHook(() => useRecorder({ limitMs: 3000, onRecorded, countdownMs: 0 }))
+    const { result } = renderHook(() => useRecorder({ limitMs: 3000, onRecorded, leadInMs: 0 }))
 
     await act(async () => {
       await result.current.start()
@@ -155,53 +155,61 @@ describe('хук записи', () => {
     expect(FakeMediaRecorder.instances[0].state).toBe('inactive')
   })
 
-  it('отсчитывает три секунды перед началом записи', async () => {
+  it('начинает писать сразу, а первые три секунды держит как разгон', async () => {
     const onRecorded = vi.fn(async () => undefined)
-    const { result } = renderHook(() => useRecorder({ limitMs: 5000, onRecorded, countdownMs: 3000 }))
-
-    let started: Promise<void> = Promise.resolve()
-    await act(async () => {
-      started = result.current.start()
-      await Promise.resolve()
-    })
-    // Первый тик отсчёта: запись ещё не идёт, микрофон не открыт
-    expect(result.current.status).toBe('preparing')
-    expect(result.current.countdown).toBe(3)
-    expect(FakeMediaRecorder.instances).toHaveLength(0)
+    const { result } = renderHook(() => useRecorder({ limitMs: 5000, onRecorded, leadInMs: 3000 }))
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000)
-      await started
+      await result.current.start()
     })
+    // Запись идёт с первого мгновения — микрофон уже открыт
     expect(result.current.status).toBe('recording')
-    expect(result.current.countdown).toBe(0)
+    expect(result.current.leadInLeftMs).toBe(3000)
     expect(FakeMediaRecorder.instances).toHaveLength(1)
+
+    // Разгон идёт: время реплики ещё не пошло
+    await act(async () => {
+      vi.advanceTimersByTime(1500)
+    })
+    expect(result.current.elapsedMs).toBe(0)
+    expect(result.current.leadInLeftMs).toBeGreaterThan(0)
+
+    // Разгон закончился: время реплики пошло, автостоп ждёт разгон плюс реплику
+    await act(async () => {
+      vi.advanceTimersByTime(1500)
+    })
+    expect(result.current.leadInLeftMs).toBe(0)
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000)
+    })
+    await flush()
+    expect(onRecorded).toHaveBeenCalledTimes(1)
   })
 
-  it('отмена во время отсчёта не открывает микрофон', async () => {
+  it('стоп во время разгона отменяет запись и ничего не отправляет', async () => {
     const onRecorded = vi.fn(async () => undefined)
-    const { result } = renderHook(() => useRecorder({ limitMs: 5000, onRecorded, countdownMs: 3000 }))
+    const { result } = renderHook(() => useRecorder({ limitMs: 5000, onRecorded, leadInMs: 3000 }))
 
     await act(async () => {
-      void result.current.start()
-      await Promise.resolve()
+      await result.current.start()
     })
-    expect(result.current.status).toBe('preparing')
+    expect(result.current.status).toBe('recording')
 
     await act(async () => {
-      result.current.cancel()
-      await vi.advanceTimersByTimeAsync(4000)
+      result.current.stop()
     })
-    expect(result.current.status).toBe('idle')
-    expect(FakeMediaRecorder.instances).toHaveLength(0)
+    await flush()
     expect(onRecorded).not.toHaveBeenCalled()
+    expect(result.current.status).toBe('idle')
+    expect(result.current.error).toBeNull()
   })
 
   it('применяет заданную громкость микрофона', async () => {
     const stubs = installBrowserStubs()
     const onRecorded = vi.fn(async () => undefined)
     const { result } = renderHook(() =>
-      useRecorder({ limitMs: 2000, onRecorded, countdownMs: 0, gain: 2.5 }),
+      useRecorder({ limitMs: 2000, onRecorded, leadInMs: 0, gain: 2.5 }),
     )
 
     await act(async () => {
@@ -214,7 +222,7 @@ describe('хук записи', () => {
   it('сообщает, если микрофон отдал отключённое устройство', async () => {
     installBrowserStubs(true)
     const onRecorded = vi.fn(async () => undefined)
-    const { result } = renderHook(() => useRecorder({ limitMs: 2000, onRecorded, countdownMs: 0 }))
+    const { result } = renderHook(() => useRecorder({ limitMs: 2000, onRecorded, leadInMs: 0 }))
 
     await act(async () => {
       await result.current.start()
@@ -226,7 +234,7 @@ describe('хук записи', () => {
 
   it('останавливается вручную раньше лимита', async () => {
     const onRecorded = vi.fn(async () => undefined)
-    const { result } = renderHook(() => useRecorder({ limitMs: 5000, onRecorded, countdownMs: 0 }))
+    const { result } = renderHook(() => useRecorder({ limitMs: 5000, onRecorded, leadInMs: 0 }))
 
     await act(async () => {
       await result.current.start()
@@ -243,7 +251,7 @@ describe('хук записи', () => {
   it('сообщает об ошибке, если микрофон ничего не записал', async () => {
     const onRecorded = vi.fn(async () => undefined)
     FakeMediaRecorder.nextIsEmpty = true
-    const { result } = renderHook(() => useRecorder({ limitMs: 2000, onRecorded, countdownMs: 0 }))
+    const { result } = renderHook(() => useRecorder({ limitMs: 2000, onRecorded, leadInMs: 0 }))
 
     await act(async () => {
       await result.current.start()

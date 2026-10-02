@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, Header, Path as PathParam, UploadFile, status
+from fastapi import APIRouter, File, Header, Path as PathParam, Query, UploadFile, status
 from fastapi.responses import Response
 
 from app.api.deps import ParticipantDep, RoomDep, SessionDep
@@ -109,6 +109,7 @@ async def upload_take(
     line_id: Annotated[uuid.UUID, PathParam()],
     file: Annotated[UploadFile, File()],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    lead_in_ms: Annotated[int, Query(ge=0, le=10000)] = 0,
 ) -> RecordingOut:
     line = await lines_service.get_line(session, room.id, line_id)
 
@@ -163,23 +164,29 @@ async def upload_take(
     # Длительность меряем отдельно: у webm из MediaRecorder нет заголовка Duration, и
     # `info.duration_ms` там 0 — доверять этому числу нельзя (лимит бы не сработал).
     measured_ms = await asyncio.to_thread(probe.audio_duration_ms, raw_path)
-    if measured_ms > line.duration_ms + settings.record_tolerance_ms:
+    # «Разгон» (первые секунды после нажатия «записать») в лимит реплики не входит: участник
+    # пишет реплику плюс разгон, а в реплику попадает уже обрезанная часть.
+    allowed_ms = line.duration_ms + lead_in_ms + settings.record_tolerance_ms
+    if measured_ms > allowed_ms:
         raw_path.unlink(missing_ok=True)
         raise RecordingTooLong(
             f"Запись длиннее реплики: {measured_ms} мс против {line.duration_ms} мс "
-            f"(допуск {settings.record_tolerance_ms} мс)",
+            f"(+ разгон {lead_in_ms} мс, допуск {settings.record_tolerance_ms} мс)",
             extra={"duration_ms": measured_ms, "line_duration_ms": line.duration_ms},
         )
 
     processed_name = f"{Path(raw_relative).stem}.wav"
     processed_relative = "/".join([*raw_relative.split("/")[:-1], processed_name])
     processed_path = storage.absolute(processed_relative)
+    denoise = bool((room.settings or {}).get("denoise", True))
     await asyncio.to_thread(
         ffmpeg.normalize_recording,
         raw_path,
         processed_path,
         line.duration_ms,
         settings.record_loudness_target,
+        skip_ms=lead_in_ms,
+        denoise=denoise,
     )
     loudness = await asyncio.to_thread(ffmpeg.loudness_lufs, processed_path)
 
@@ -215,6 +222,8 @@ async def upload_take(
         size_bytes=size_bytes,
         declared_ms=info.duration_ms,
         line_ms=line.duration_ms,
+        lead_in_ms=lead_in_ms,
+        denoise=denoise,
     )
     return recording_to_out(recording)
 

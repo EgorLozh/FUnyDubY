@@ -96,4 +96,13 @@ async def media(
     path, content_type, filename = await _resolve(kind, room.id, ref, session)
     if not path.exists():
         raise NotFound("Файл не найден в хранилище", code="media_missing")
-    return file_response(request, path, content_type=content_type, filename=filename)
+    # Тейк живёт по неизменному адресу, а после перезаписи в нём уже другой звук: кеш браузера
+    # в этом случае возвращал старую запись, хотя в сборку уходила новая. Отдаём без кеша.
+    cache_seconds = 0 if kind == "recording" else 3600
+    return file_response(
+        request,
+        path,
+        content_type=content_type,
+        filename=filename,
+        cache_seconds=cache_seconds,
+    )

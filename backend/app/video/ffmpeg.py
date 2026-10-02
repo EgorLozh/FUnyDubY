@@ -112,13 +112,36 @@ def slice_wav(source: Path, out: Path, start_ms: int, end_ms: int) -> None:
     )
 
 
-def normalize_recording(source: Path, out: Path, target_duration_ms: int, loudness_lufs: int) -> None:
+def normalize_recording(
+    source: Path,
+    out: Path,
+    target_duration_ms: int,
+    loudness_lufs: int,
+    *,
+    skip_ms: int = 0,
+    denoise: bool = False,
+) -> None:
     """Привести запись участника ровно к длительности реплики: обрезать или добить тишиной.
 
     `atrim` + `apad` гарантируют точную длину, `loudnorm` выравнивает громкость между участниками.
+
+    `skip_ms` выбрасывает начало записи: участник жмёт «записать» сразу, а первые секунды уходят
+    на «разгон» (вдох, настройка на оригинал) — в реплику они попадать не должны.
+    `denoise` включает лёгкое шумоподавление: `highpass` убирает гул и ветер ниже 70 Гц,
+    `afftdn` с адаптивной оценкой шума — шипение и комнатный фон. Голос при таких параметрах
+    не страдает: подавление умеренное (12 дБ), а не «выжигание» всего, что тише речи.
     """
     out.parent.mkdir(parents=True, exist_ok=True)
     duration_s = target_duration_ms / 1000
+    chain: list[str] = []
+    if skip_ms > 0:
+        chain.append(f"atrim=start={skip_ms / 1000:.3f}")
+    if denoise:
+        chain.append("highpass=f=70")
+        chain.append("afftdn=nr=12:nf=-40:tn=1")
+    chain.append(f"atrim=0:{duration_s:.3f}")
+    chain.append(f"apad=whole_dur={duration_s:.3f}")
+    chain.append(f"loudnorm=I={loudness_lufs}:TP=-1.5:LRA=11")
     run(
         [
             "-nostdin",
@@ -133,11 +156,7 @@ def normalize_recording(source: Path, out: Path, target_duration_ms: int, loudne
             "-ar",
             "48000",
             "-af",
-            (
-                f"atrim=0:{duration_s:.3f},"
-                f"apad=whole_dur={duration_s:.3f},"
-                f"loudnorm=I={loudness_lufs}:TP=-1.5:LRA=11"
-            ),
+            ",".join(chain),
             "-c:a",
             "pcm_s16le",
             str(out),
