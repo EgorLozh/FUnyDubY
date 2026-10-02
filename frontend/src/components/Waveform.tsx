@@ -98,10 +98,21 @@ export function Waveform({
       ctx.lineTo(width, middle)
       ctx.stroke()
 
-      const bars = (data: Float32Array, color: string, fromX: number, span: number) => {
+      /**
+       * Рисуем колонки. `total` — сколько колонок на всей оси: у живой записи их набирается
+       * меньше, чем поместится, и без этого её столбики растягивались на всю ширину, хотя
+       * запись только началась.
+       */
+      const bars = (
+        data: Float32Array,
+        color: string,
+        fromX: number,
+        span: number,
+        total?: number,
+      ) => {
         const peak = maxOf(data)
         const gain = peak > 0.0001 ? Math.min(12, 0.95 / peak) : 1
-        const step = span / Math.max(1, data.length)
+        const step = span / Math.max(1, total ?? data.length)
         ctx.fillStyle = color
         for (let index = 0; index < data.length; index += 1) {
           const value = Math.min(1, data[index] * gain)
@@ -135,13 +146,13 @@ export function Waveform({
         ctx.beginPath()
         ctx.rect(0, 0, leadWidth, height)
         ctx.clip()
-        bars(live, RUNUP_COLOR, 0, width)
+        bars(live, RUNUP_COLOR, 0, width, buckets)
         ctx.restore()
         ctx.save()
         ctx.beginPath()
         ctx.rect(leadWidth, 0, replicaWidth, height)
         ctx.clip()
-        bars(live, LIVE_COLOR, 0, width)
+        bars(live, LIVE_COLOR, 0, width, buckets)
         ctx.restore()
         // Курсор записи идёт без остановок — по разгону тоже
         const end = (live.length / Math.max(1, buckets)) * width
@@ -152,7 +163,7 @@ export function Waveform({
         ctx.lineTo(Math.min(width, end), height - 2)
         ctx.stroke()
       } else if (live && live.length > 0) {
-        bars(live, LIVE_COLOR, 0, width)
+        bars(live, LIVE_COLOR, 0, width, buckets)
         const end = (live.length / Math.max(1, buckets)) * width
         ctx.strokeStyle = PLAYHEAD_COLOR
         ctx.lineWidth = 2
