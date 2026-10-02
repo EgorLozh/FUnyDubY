@@ -134,12 +134,17 @@ def normalize_recording(
     out.parent.mkdir(parents=True, exist_ok=True)
     duration_s = target_duration_ms / 1000
     chain: list[str] = []
-    if skip_ms > 0:
-        chain.append(f"atrim=start={skip_ms / 1000:.3f}")
     if denoise:
         chain.append("highpass=f=70")
         chain.append("afftdn=nr=12:nf=-40:tn=1")
-    chain.append(f"atrim=0:{duration_s:.3f}")
+    # Окно реплики задаём одним atrim: после `atrim=start` метки времени не сбрасываются, и
+    # второй atrim отсчитывал бы от нуля исходника, то есть вырезал пустоту.
+    if skip_ms > 0:
+        chain.append(
+            f"atrim=start={skip_ms / 1000:.3f}:end={(skip_ms + target_duration_ms) / 1000:.3f}"
+        )
+    else:
+        chain.append(f"atrim=0:{duration_s:.3f}")
     chain.append(f"apad=whole_dur={duration_s:.3f}")
     chain.append(f"loudnorm=I={loudness_lufs}:TP=-1.5:LRA=11")
     run(
