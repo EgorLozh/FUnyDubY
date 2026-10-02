@@ -257,7 +257,7 @@ function MyLine({
               liveSource={recorder.getLivePeaks}
               active={recording}
               progress={playing === 'take' ? position : null}
-              leadInLeftMs={recording ? leadInLeftMs : null}
+              leadInFraction={recording ? LEAD_IN_MS / (LEAD_IN_MS + line.duration_ms) : null}
               label={
                 recording
                   ? '● идёт запись — волна растёт слева направо'

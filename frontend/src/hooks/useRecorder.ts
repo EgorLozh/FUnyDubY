@@ -246,15 +246,15 @@ export function useRecorder({
         for (const sample of buffer) sum += sample * sample
         setLevel(Math.min(1, Math.sqrt(sum / buffer.length) * 4))
 
-        // Волна: колонки начинаем копить только после разгона, иначе своя запись уезжала бы
-        // вправо относительно оригинала, а звук разгона в реплику не попадает вовсе.
+        // Волна: колонки копим всю запись, включая разгон, — тогда она растёт слева направо
+        // без остановок, а разгон виден как часть записи (в панели он рисуется приглушённо).
         const peak = peakOf(buffer)
-        const takeElapsed = Date.now() - takeStartAt.current
-        if (takeElapsed > 0) {
-          if (peak > pendingPeak.current) pendingPeak.current = peak
-        }
-        const elapsed = Math.max(0, takeElapsed)
-        const expected = Math.min(buckets, Math.round((buckets * elapsed) / limitMs))
+        if (peak > pendingPeak.current) pendingPeak.current = peak
+        const totalElapsed = Date.now() - startedAt.current
+        const expected = Math.min(
+          buckets,
+          Math.round((buckets * totalElapsed) / (limitMs + leadInMs)),
+        )
         while (liveBars.current.length < expected) {
           liveBars.current.push(pendingPeak.current)
           pendingPeak.current = 0

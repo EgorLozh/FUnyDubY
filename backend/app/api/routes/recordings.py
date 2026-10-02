@@ -178,7 +178,7 @@ async def upload_take(
     processed_name = f"{Path(raw_relative).stem}.wav"
     processed_relative = "/".join([*raw_relative.split("/")[:-1], processed_name])
     processed_path = storage.absolute(processed_relative)
-    denoise = bool((room.settings or {}).get("denoise", True))
+    denoise = (room.settings or {}).get("denoise", settings.denoise_strength)
     await asyncio.to_thread(
         ffmpeg.normalize_recording,
         raw_path,

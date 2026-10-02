@@ -29,6 +29,8 @@ describe('Waveform', () => {
       <Waveform
         liveSource={() => new Float32Array([0.3, 0.6])}
         active
+        leadInFraction={0.5}
+        ghost={new Float32Array([0.2, 0.5])}
         label="● идёт запись"
       />,
     )

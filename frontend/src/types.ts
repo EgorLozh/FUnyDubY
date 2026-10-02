@@ -25,6 +25,9 @@ export type VideoMeta = {
   created_at: string
 }
 
+/** Сила шумоподавления записи: цепочки фильтров подобраны замерами на настоящей речи. */
+export type DenoiseStrength = 'off' | 'light' | 'medium' | 'strong'
+
 export type Room = {
   id: string
   title: string

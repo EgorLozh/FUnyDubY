@@ -32,7 +32,7 @@ class RoomSettings(BaseModel):
     merge_gap_ms: int | None = Field(default=None, ge=50, le=2000)
     max_line_ms: int | None = Field(default=None, ge=2000, le=60000)
     record_tolerance_ms: int | None = Field(default=None, ge=0, le=1000)
-    denoise: bool | None = None
+    denoise: bool | str | None = Field(default=None, pattern="^(off|light|medium|strong|true|false)$")
 
 
 class ParticipantCreate(BaseModel):

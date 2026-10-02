@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     separation_mode: str = "subtract_and_duck"
     separation_chunk_s: int = 25
     separation_overlap_s: int = 1
+    # Сила шумоподавления записей: off | light | medium | strong
+    denoise_strength: str = "strong"
     default_ducking_db: int = -7
     # Bandit отдаёт готовые стемы, поэтому дуккинг ему не нужен: фон и так без речи.
     bandit_ducking_db: int = 0

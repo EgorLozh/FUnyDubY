@@ -1,11 +1,9 @@
 /**
- * Волна звука на canvas: оригинал полупрозрачной подложкой, запись — поверх.
+ * Волна звука: своя запись поверх бледной волны оригинала.
  *
- * Ориентир (оригинальная реплика) и своя запись рисуются в одних координатах времени, поэтому
- * видно, попадаешь ли ты в фразу. Во время записи волна дорисовывается слева направо: ширина
- * показывает, какую часть реплики ты уже использовал.
- *
- * Без canvas-контекста (например, в jsdom) компонент молча рисует пустое поле — тесты не падают.
+ * Во время записи ось времени — вся запись целиком, включая «разгон»: собственная волна растёт
+ * слева направо без остановок, а бледная волна оригинала сдвинута вправо ровно на длину разгона.
+ * Так видно, что разгон — часть записи, но в реплику он не попадёт: под ним оригинала нет.
  */
 
 import { useEffect, useRef } from 'react'
@@ -21,20 +19,23 @@ export type WaveformProps = {
   active?: boolean
   /** Позиция прослушивания, 0..1. */
   progress?: number | null
+  /**
+   * Доля «разгона» в общей длине записи (0..1). Только во время записи: подложка и своя волна
+   * сдвигаются на эту долю, потому что начало записи в реплику не входит.
+   */
+  leadInFraction?: number | null
   /** Сколько всего колонок по оси времени (для живой волны). */
   buckets?: number
-  /** Остаток «разгона» в мс: пока он есть, запись ещё не реплика — зону затемняем. */
-  leadInLeftMs?: number | null
-  /** Длительность «разгона» — чтобы понимать долю затемнённой зоны. */
-  leadInTotalMs?: number
   height?: number
   label?: string
   hint?: string
 }
 
-const GHOST_COLOR = 'rgba(148, 163, 184, 0.55)'
+const GHOST_COLOR = 'rgba(148, 163, 184, 0.45)'
+const GHOST_EDGE = 'rgba(148, 163, 184, 0.9)'
 const MAIN_COLOR = '#ff6b4a'
 const LIVE_COLOR = '#ff3d1f'
+const RUNUP_COLOR = 'rgba(255, 61, 31, 0.35)'
 const AXIS_COLOR = 'rgba(148, 163, 184, 0.25)'
 const PLAYHEAD_COLOR = 'rgba(255, 255, 255, 0.75)'
 
@@ -50,9 +51,8 @@ export function Waveform({
   liveSource,
   active = false,
   progress = null,
+  leadInFraction = null,
   buckets = 480,
-  leadInLeftMs = null,
-  leadInTotalMs = 3000,
   height = 56,
   label,
   hint,
@@ -86,7 +86,11 @@ export function Waveform({
       const middle = height / 2
       const maxBar = middle - 3
 
-      // Ось по центру: без неё тишина выглядит как пустое место
+      // Во время записи разгон занимает левую долю оси; в покое его нет — вся ширина про реплику
+      const lead = active && leadInFraction ? Math.min(0.9, Math.max(0, leadInFraction)) : 0
+      const leadWidth = width * lead
+      const replicaWidth = width - leadWidth
+
       ctx.strokeStyle = AXIS_COLOR
       ctx.lineWidth = 1
       ctx.beginPath()
@@ -94,53 +98,73 @@ export function Waveform({
       ctx.lineTo(width, middle)
       ctx.stroke()
 
-      const total = Math.max(1, buckets)
-      const barWidth = width / total
-
-      const drawBars = (data: Float32Array, color: string, span: number) => {
-        const gain = maxOf(data) > 0.0001 ? Math.min(12, 0.95 / maxOf(data)) : 1
+      const bars = (data: Float32Array, color: string, fromX: number, span: number) => {
+        const peak = maxOf(data)
+        const gain = peak > 0.0001 ? Math.min(12, 0.95 / peak) : 1
+        const step = span / Math.max(1, data.length)
         ctx.fillStyle = color
         for (let index = 0; index < data.length; index += 1) {
           const value = Math.min(1, data[index] * gain)
           const barHeight = Math.max(1, value * maxBar)
-          const x = index * span
-          if (x > width) break
-          ctx.fillRect(x, middle - barHeight, Math.max(1, span - 0.5), barHeight * 2)
+          ctx.fillRect(fromX + index * step, middle - barHeight, Math.max(1, step - 0.4), barHeight * 2)
         }
       }
 
-      // Подложка — оригинал: рисуем первым, чтобы запись легла сверху
-      if (ghost && ghost.length > 0) drawBars(ghost, GHOST_COLOR, width / ghost.length)
-
-      // Разгон: пока реплика не началась, затемняем зону, в которую запись идёт «в мусор»,
-      // и показываем границу — с неё начнётся сама реплика и совпадёт с подложкой.
-      if (active && leadInLeftMs !== null && leadInLeftMs > 0 && leadInTotalMs > 0) {
-        const leadWidth = width * (leadInLeftMs / leadInTotalMs)
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.45)'
-        ctx.fillRect(0, 0, leadWidth, height)
-        ctx.strokeStyle = PLAYHEAD_COLOR
-        ctx.lineWidth = 2
+      if (ghost && ghost.length > 0) {
+        // Подложка: под разгоном её нет — там реплика ещё не пишется
+        ctx.save()
         ctx.beginPath()
-        ctx.moveTo(leadWidth, 2)
-        ctx.lineTo(leadWidth, height - 2)
-        ctx.stroke()
+        ctx.rect(leadWidth, 0, replicaWidth, height)
+        ctx.clip()
+        bars(ghost, GHOST_COLOR, leadWidth, replicaWidth)
+        ctx.restore()
+        if (lead > 0) {
+          ctx.strokeStyle = GHOST_EDGE
+          ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.moveTo(leadWidth, 2)
+          ctx.lineTo(leadWidth, height - 2)
+          ctx.stroke()
+        }
       }
 
       const live = active && liveSource ? liveSource() : null
-      if (live && live.length > 0) {
-        drawBars(live, LIVE_COLOR, barWidth)
-        // Отметка «докуда дошёл»: остаток реплики виден как пустое место
-        const end = live.length * barWidth
-        ctx.strokeStyle = PLAYHEAD_COLOR
+      if (live && live.length > 0 && lead > 0) {
+        // Разгон рисуем приглушённо: это часть записи, но в реплику она не войдёт
+        ctx.save()
         ctx.beginPath()
-        ctx.moveTo(end, 2)
-        ctx.lineTo(end, height - 2)
+        ctx.rect(0, 0, leadWidth, height)
+        ctx.clip()
+        bars(live, RUNUP_COLOR, 0, width)
+        ctx.restore()
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(leadWidth, 0, replicaWidth, height)
+        ctx.clip()
+        bars(live, LIVE_COLOR, 0, width)
+        ctx.restore()
+        // Курсор записи идёт без остановок — по разгону тоже
+        const end = (live.length / Math.max(1, buckets)) * width
+        ctx.strokeStyle = PLAYHEAD_COLOR
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(Math.min(width, end), 2)
+        ctx.lineTo(Math.min(width, end), height - 2)
+        ctx.stroke()
+      } else if (live && live.length > 0) {
+        bars(live, LIVE_COLOR, 0, width)
+        const end = (live.length / Math.max(1, buckets)) * width
+        ctx.strokeStyle = PLAYHEAD_COLOR
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(Math.min(width, end), 2)
+        ctx.lineTo(Math.min(width, end), height - 2)
         ctx.stroke()
       } else if (peaks && peaks.length > 0) {
-        drawBars(peaks, MAIN_COLOR, width / peaks.length)
+        bars(peaks, MAIN_COLOR, 0, width)
       }
 
-      if (progress !== null && progress >= 0 && progress <= 1 && (!active || !live)) {
+      if (progress !== null && progress >= 0 && progress <= 1 && !active) {
         const x = progress * width
         ctx.strokeStyle = PLAYHEAD_COLOR
         ctx.lineWidth = 2
@@ -168,7 +192,7 @@ export function Waveform({
       if (frame.current !== null) cancelAnimationFrame(frame.current)
       frame.current = null
     }
-  }, [ghost, peaks, liveSource, active, progress, buckets, height, leadInLeftMs, leadInTotalMs])
+  }, [ghost, peaks, liveSource, active, progress, leadInFraction, buckets, height])
 
   return (
     <div className="waveform">

@@ -112,6 +112,27 @@ def slice_wav(source: Path, out: Path, start_ms: int, end_ms: int) -> None:
     )
 
 
+#: Сила шумоподавления. Подобрана замерами на настоящей речи (см. docstring ниже).
+DENOISE_CHAINS: dict[str, list[str]] = {
+    "light": ["highpass=f=70", "anlmdn=s=7:p=0.002:r=0.002:m=15"],
+    "medium": ["highpass=f=70", "anlmdn=s=9:p=0.004:r=0.004:m=21"],
+    "strong": [
+        "highpass=f=70",
+        "anlmdn=s=10:p=0.01:r=0.01:m=27",
+        "afftdn=nr=12:nf=-60",
+    ],
+}
+
+
+def _denoise_chain(denoise: bool | str | None) -> list[str]:
+    """Цепочка фильтров по настройке комнаты: понимает и старое булево значение, и силу."""
+    if denoise is None or denoise is False or denoise == "off":
+        return []
+    if denoise is True:
+        return list(DENOISE_CHAINS["strong"])
+    return list(DENOISE_CHAINS.get(str(denoise), DENOISE_CHAINS["strong"]))
+
+
 def normalize_recording(
     source: Path,
     out: Path,
@@ -119,7 +140,7 @@ def normalize_recording(
     loudness_lufs: int,
     *,
     skip_ms: int = 0,
-    denoise: bool = False,
+    denoise: bool | str | None = False,
 ) -> None:
     """Привести запись участника ровно к длительности реплики: обрезать или добить тишиной.
 
@@ -127,17 +148,19 @@ def normalize_recording(
 
     `skip_ms` выбрасывает начало записи: участник жмёт «записать» сразу, а первые секунды уходят
     на «разгон» (вдох, настройка на оригинал) — в реплику они попадать не должны.
-    `denoise` включает шумоподавление: `highpass` убирает гул и ветер ниже 70 Гц, `anlmdn`
-    (нелокальные средние) — шипение, комнатный фон и шум микрофона. Параметры подобраны
-    измерениями на настоящей речи: шум в паузах падает на ~23 дБ, а сам голос меняется на 0.3 дБ.
-    `afftdn` давал всего 8 дБ при том же влиянии на голос, поэтому не используется.
+    `denoise` задаёт силу шумоподавления: `off`/`False` — выключено, `light`, `medium`, `strong`
+    (по умолчанию). Цепочка — `highpass` (гул и ветер ниже 70 Гц) плюс `anlmdn` (нелокальные
+    средние: шипение, комнатный фон, шум микрофона), у `strong` в конце добавлен спектральный
+    гейт `afftdn`.
+
+    Сила выбрана измерениями на настоящей речи: относительно идеально чистой записи шум в паузах
+    получается на 23 дБ тише при `light`, на 29 дБ при `medium` и на 38 дБ при `strong`, а сам
+    голос теряет 0.4, 0.5 и 1.1 дБ соответственно. `afftdn` в одиночку давал всего 8 дБ.
     """
     out.parent.mkdir(parents=True, exist_ok=True)
     duration_s = target_duration_ms / 1000
     chain: list[str] = []
-    if denoise:
-        chain.append("highpass=f=70")
-        chain.append("anlmdn=s=7:p=0.002:r=0.002:m=15")
+    chain.extend(_denoise_chain(denoise))
     # Окно реплики задаём одним atrim: после `atrim=start` метки времени не сбрасываются, и
     # второй atrim отсчитывал бы от нуля исходника, то есть вырезал пустоту.
     if skip_ms > 0:

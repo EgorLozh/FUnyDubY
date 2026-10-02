@@ -12,6 +12,7 @@ import {
   type AdminOverview,
   type AdminPurgeResult,
   type AdminRoomDetail,
+  type DenoiseStrength,
   type PurgeScope,
   type Assignment,
   type BulkAssignment,
@@ -162,7 +163,7 @@ export const api = {
   /** Правка настроек комнаты (например шумоподавления записей). */
   updateRoomSettings(
     roomId: string,
-    patch: { denoise?: boolean; ducking_db?: number },
+    patch: { denoise?: DenoiseStrength; ducking_db?: number },
   ): Promise<Room> {
     return request<Room>(`/rooms/${roomId}`, { method: 'PATCH', body: patch, roomId })
   },

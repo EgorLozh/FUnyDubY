@@ -43,7 +43,7 @@ def default_settings() -> dict[str, Any]:
         "merge_gap_ms": settings.merge_gap_ms,
         "max_line_ms": settings.max_line_ms,
         "record_tolerance_ms": settings.record_tolerance_ms,
-        "denoise": True,
+        "denoise": settings.denoise_strength,
     }
 
 
