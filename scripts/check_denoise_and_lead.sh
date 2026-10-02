@@ -9,8 +9,8 @@ echo "== готовлю сигналы"
 docker compose exec -T worker-gpu bash -lc '
 set -e
 cd /tmp
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:duration=1:volume=0.3" -f lavfi -i "anoisesrc=color=white:amplitude=0.006:duration=1" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1" -ar 48000 -ac 1 sig_then_noise.wav
-ffmpeg -hide_banner -loglevel error -y -f lavfi -i "anoisesrc=color=white:amplitude=0.004:duration=3" -f lavfi -i "sine=frequency=440:duration=1.3:volume=0.3" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1" -ar 48000 -ac 1 with_lead.wav
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:duration=1" -f lavfi -i "anoisesrc=color=white:amplitude=0.006:duration=1" -filter_complex "[0:a]volume=0.3[t];[t][1:a]concat=n=2:v=0:a=1" -ar 48000 -ac 1 sig_then_noise.wav
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "anoisesrc=color=white:amplitude=0.004:duration=3" -f lavfi -i "sine=frequency=440:duration=1.3" -filter_complex "[1:a]volume=0.3[t];[0:a][t]concat=n=2:v=0:a=1" -ar 48000 -ac 1 with_lead.wav
 ' 2>&1 | tail -3
 
 echo "== шумоподавление: тон 1 с, затем чистый шум 1 с"
